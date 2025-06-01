@@ -1,0 +1,5 @@
+// config/jwt.js
+module.exports = {
+  secret: process.env.JWT_SECRET || 'ce2305385e93b7c69f64afc9b3df3b8f8b8f3c0bdb9a1e4a440299a3c8c367163ceca3a2b27f37efe0c35c89f94e9777ece64d524648cfbfde3ec3593bcdaa87018af549a5edbd6453228baa4a74384169529bf4575b9c068528d9489f8d90ff09059322f3ecadc8f05d40bc39d7c594ac16884f9f4ca4261ead6ddc26b78104883909c6add3129ac7e55b98dcc0f7f826d6587d72a22aebedcf8e250fa8cb0afc325298a12e61a1bce58d9f2240e08db5769ae84f02c82b8e15f60646cb9c8e27c494d2921a5f8e9e27eee21350f3edd2bc95c0abcc3db81df71f7f6232264c198c19774315329dc1a1f260cf1c6c95d2a517847799ad90fcba9e5bf8acdd7c', // Use environment variable!
+  expiresIn: process.env.JWT_EXPIRES_IN || '1d', // Token expiry time
+};
