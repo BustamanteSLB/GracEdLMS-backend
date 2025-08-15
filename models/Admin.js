@@ -6,7 +6,7 @@ const adminSchema = new mongoose.Schema({
   // Admin-specific fields can be added here if needed in the future
   // Example: department, accessLevel, etc.
   canManageUsers: { type: Boolean, default: true },
-  canManageCourses: { type: Boolean, default: true },
+  canManageSubjects: { type: Boolean, default: true },
 });
 
 // Use Mongoose discriminators for inheritance

@@ -2,31 +2,58 @@
 const mongoose = require('mongoose');
 
 const gradeSchema = new mongoose.Schema({
-    student: { // Student who received the grade
+    student: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true
     },
-    activity: { // The graded activity
+    activity: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Activity',
         required: true
     },
-    course: { // The course context
+    subject: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Course',
+        ref: 'Subject',
         required: true
     },
-    score: { type: Number, required: true },
-    gradedBy: { // Teacher who graded
+    quarter: {
+        type: String,
+        ref: 'Activity',
+        required: true
+    },
+    score: {
+        type: Number,
+        required: true,
+        min: 0
+        // Remove any custom setters that might be multiplying
+    },
+    bonusPoints: {
+        type: Number,
+        min: 0,
+        default: undefined // Change from 0 to undefined
+    },
+    comments: {
+        type: String,
+        trim: true
+    },
+    gradedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true
-    },
-    comments: { type: String, trim: true },
-}, { timestamps: true });
+    }
+}, {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+});
 
-// Ensure a student has only one grade per activity
+// Add virtual for total score
+gradeSchema.virtual('totalScore').get(function() {
+    return this.score + (this.bonusPoints || 0);
+});
+
+// Add compound index to prevent duplicate grades for same student-activity pair
 gradeSchema.index({ student: 1, activity: 1 }, { unique: true });
 
 const Grade = mongoose.model('Grade', gradeSchema);

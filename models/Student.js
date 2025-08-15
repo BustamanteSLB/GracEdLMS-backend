@@ -3,10 +3,10 @@ const mongoose = require('mongoose');
 const User = require('./User');
 
 const studentSchema = new mongoose.Schema({
-  // Courses the student is enrolled in
-  enrolledCourses: [{
+  // Subjects the student is enrolled in
+  enrolledSubjects: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Course'
+    ref: 'Subject'
   }],
   // Student-specific fields like gradeLevel, guardianInfo etc.
   gradeLevel: String,

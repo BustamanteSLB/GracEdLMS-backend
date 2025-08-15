@@ -9,7 +9,8 @@ const userSchema = new mongoose.Schema({
     type: String,
     unique: true,
     required: [true, 'User ID is required.'],
-    default: generateUserId // Generate ID automatically
+    default: generateUserId, // Generate ID automatically
+    trim: true,
   },
   username: {
     type: String,
@@ -76,6 +77,10 @@ const userSchema = new mongoose.Schema({
     enum: ['active', 'inactive', 'suspended', 'pending', 'archived'],
     default: 'pending', // Default status, might need activation
   },
+  temporaryPassword: {
+    type: String,
+    select: false, // Hide temporary password by default
+  },
   lastLogin: {
     type: Date,
   },
@@ -88,6 +93,9 @@ const userSchema = new mongoose.Schema({
 userSchema.pre('save', async function (next) {
   // Only run this function if password was actually modified
   if (!this.isModified('password')) return next();
+
+  // Store the plain text password temporarily (SECURITY RISK)
+  this.temporaryPassword = this.password;
 
   // Hash the password with cost of 12
   this.password = await bcrypt.hash(this.password, 12);
