@@ -29,6 +29,11 @@ const app = express();
 
 // ─── Request logger (catch‐all) ────────────────────────────────────────────────
 // This will print every incoming request’s method and full URL to the console:
+
+app.get("/", (req, res) => {
+  res.send("GraceDLMS Backend API is running");
+});
+
 app.use((req, res, next) => {
   console.log(`⚡ Incoming request: ${req.method} ${req.originalUrl}`);
   next();
@@ -88,3 +93,4 @@ const server = app.listen(PORT, async () => {
     }
   }, 3000); // Wait 3 seconds after server start to ensure DB connection is ready
 });
+
