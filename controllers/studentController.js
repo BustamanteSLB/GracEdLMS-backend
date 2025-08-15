@@ -23,7 +23,7 @@ exports.createStudent = async (req, res) => {
 exports.getAllStudents = async (req, res) => {
   try {
     const students = await Student.find({ status: { $ne: 'archived' } })
-      .populate('enrolledCourses', 'courseCode courseName'); // Populate enrolled courses
+      .populate('enrolledSubjects', 'subjectCode subjectName'); // Populate enrolled subjects
     res.status(200).json({
       success: true,
       data: students,
@@ -49,7 +49,7 @@ exports.getStudent = async (req, res) => {
     }
 
     const student = await Student.findById(req.params.id)
-      .populate('enrolledCourses', 'courseCode courseName');
+      .populate('enrolledSubjects', 'subjectCode subjectName');
     if (!student || student.status === 'archived') {
       return res.status(404).json({
         success: false,
