@@ -8,7 +8,7 @@ const router = express.Router();
 
 // Input validation middleware
 const validateLogin = [
-  body('email').isEmail().withMessage('Please provide a valid email address').normalizeEmail(),
+  body('identifier').notEmpty().withMessage('Username or User ID is required').trim(),
   body('password').notEmpty().withMessage('Password is required'),
   (req, res, next) => {
     const errors = validationResult(req);

@@ -1,4 +1,4 @@
-const express = require('express');
+const express = require("express");
 const {
   createUser,
   getAllUsers,
@@ -7,38 +7,41 @@ const {
   updateUserPassword,
   deleteUser,
   restoreUser,
-  permanentDeleteUser
-} = require('../controllers/userController');
-const { protect, authorize } = require('../middleware/authMiddleware');
+  permanentDeleteUser,
+  createMultipleUsers,
+  createUsersFromExcel,
+} = require("../controllers/userController");
+const { protect, authorize } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-// All user routes require login
+// Protect all routes
 router.use(protect);
 
-// Admin-only routes
 router
-  .route('/')
+  .route("/")
   .post(authorize('Admin'), createUser) // Create a user
-  .get(authorize('Admin'), getAllUsers); // Get all users
+  .get(authorize('Admin', 'Teacher'), getAllUsers); // Get all users
+
+// Bulk user creation routes
+router.route("/bulk").post(authorize('Admin'), createMultipleUsers); // Keep for backward compatibility
+
+// New Excel bulk import route
+router.route("/bulk-excel").post(authorize('Admin'), createUsersFromExcel);
 
 router
-  .route('/:id')
-  .get(authorize('Admin'), getUser) // Get a single user
-  .put(authorize('Admin'), updateUser) // Update a user
-  .delete(authorize('Admin'), deleteUser); // Soft delete a user
+  .route("/:id")
+  .get(getUser) // Get a single user
+  .put(updateUser) // Update a user
+  .delete(deleteUser); // Soft delete a user
 
 router
-  .route('/:id/password') // NEW: Route for updating a user's password by ID
-  .put(authorize('Admin'), updateUserPassword);
+  .route("/:id/password") // NEW: Route for updating a user's password by ID
+  .put(updateUserPassword);
 
-router
-  .route('/:id/restore')
-  .put(authorize('Admin'), restoreUser); // Restore a soft-deleted user
+router.route("/:id/restore").put(authorize('Admin'), restoreUser); // Restore a soft-deleted user
 
 // New route for permanent deletion
-router
-  .route('/:id/permanent')
-  .delete(authorize('Admin'), permanentDeleteUser);
+router.route("/:id/permanent").delete(authorize('Admin'), permanentDeleteUser);
 
 module.exports = router;
