@@ -32,7 +32,9 @@ exports.createAnnouncement = asyncHandler(async (req, res, next) => {
   // 2) Make sure the subject actually exists
   const subject = await Subject.findById(subjectId);
   if (!subject) {
-    return next(new ErrorResponse(`Subject not found with ID ${subjectId}`, 404));
+    return next(
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+    );
   }
 
   // 3) Authorization check (Teacher or Admin only)
@@ -63,7 +65,8 @@ exports.createAnnouncement = asyncHandler(async (req, res, next) => {
   // 6) Re‐populate the newly created announcement's createdBy→author field
   announcement = await Announcement.findById(announcement._id).populate({
     path: "createdBy",
-    select: "firstName middleName lastName email username userId role",
+    select:
+      "firstName middleName lastName email username userId role profilePicture",
   });
 
   // 7) Rename createdBy to author in the JSON response
@@ -93,7 +96,9 @@ exports.getAnnouncementsForSubject = asyncHandler(async (req, res, next) => {
 
   const subject = await Subject.findById(subjectId);
   if (!subject) {
-    return next(new ErrorResponse(`Subject not found with ID ${subjectId}`, 404));
+    return next(
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+    );
   }
 
   // Authorization: Student must be enrolled, Teacher assigned, or Admin
@@ -119,7 +124,8 @@ exports.getAnnouncementsForSubject = asyncHandler(async (req, res, next) => {
   let announcements = await Announcement.find({ subject: subjectId })
     .populate({
       path: "createdBy",
-      select: "firstName middleName lastName email username userId role",
+      select:
+        "firstName middleName lastName email username userId role profilePicture",
     })
     .sort("-createdAt");
 
@@ -162,7 +168,8 @@ exports.getAnnouncement = asyncHandler(async (req, res, next) => {
     })
     .populate({
       path: "createdBy",
-      select: "firstName middleName lastName email username userId role",
+      select:
+        "firstName middleName lastName email username userId role profilePicture",
     });
 
   if (!announcement) {
@@ -253,7 +260,8 @@ exports.updateAnnouncement = asyncHandler(async (req, res, next) => {
     }
   ).populate({
     path: "createdBy",
-    select: "firstName middleName lastName email username userId role",
+    select:
+      "firstName middleName lastName email username userId role profilePicture",
   });
 
   // Rename createdBy→author for the response

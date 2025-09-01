@@ -4,7 +4,8 @@ const mongoose = require("mongoose");
 const courseMaterialSchema = new mongoose.Schema(
   {
     fileName: { type: String, required: true, trim: true }, // Original filename
-    fileUrl: { type: String, required: true }, // URL to the uploaded file
+    fileUrl: { type: String, required: true }, // Firebase Storage public URL
+    firebasePath: { type: String, required: true }, // Firebase Storage path for deletion
     fileType: { type: String }, // e.g., 'pdf', 'docx', 'pptx', 'jpg', 'png'
     fileSize: { type: Number }, // File size in bytes
     subject: {

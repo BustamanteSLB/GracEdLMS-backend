@@ -6,6 +6,137 @@ const jwt = require("jsonwebtoken");
 const jwtConfig = require("../config/jwt");
 const asyncHandler = require("../utils/asyncHandler");
 const { ErrorResponse } = require("../utils/errorResponse");
+const multer = require("multer");
+const path = require("path");
+const { bucket } = require("../config/firebaseService"); // Add Firebase import
+
+// Configure multer for image uploads
+const storage = multer.memoryStorage(); // Use memory storage for Firebase
+
+const upload = multer({
+  storage: storage,
+  fileFilter: (req, file, cb) => {
+    // Image file validation
+    const allowedImageTypes = [
+      "image/jpeg",
+      "image/jpg",
+      "image/png",
+      "image/gif",
+      "image/webp",
+    ];
+    if (allowedImageTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(
+        new Error(
+          "Only image files (JPEG, JPG, PNG, GIF, WebP) are allowed for profile pictures!"
+        ),
+        false
+      );
+    }
+  },
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+});
+
+// Helper function to upload image to Firebase Storage
+const uploadImageToFirebase = async (file, folder = "profile-pictures") => {
+  try {
+    const fileName = `${folder}/${Date.now()}-${Math.round(
+      Math.random() * 1e9
+    )}${path.extname(file.originalname)}`;
+    const fileUpload = bucket.file(fileName);
+
+    const stream = fileUpload.createWriteStream({
+      metadata: {
+        contentType: file.mimetype,
+      },
+      public: true, // Make the file publicly accessible
+    });
+
+    return new Promise((resolve, reject) => {
+      stream.on("error", (error) => {
+        console.log("Firebase upload error:", error);
+        reject(error);
+      });
+
+      stream.on("finish", async () => {
+        try {
+          // Make the file public
+          await fileUpload.makePublic();
+
+          // Get the public URL
+          const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+          resolve(publicUrl);
+        } catch (error) {
+          console.log("Error making file public:", error);
+          reject(error);
+        }
+      });
+
+      stream.end(file.buffer);
+    });
+  } catch (error) {
+    console.log("Error uploading to Firebase:", error);
+    throw error;
+  }
+};
+
+// @desc    Upload profile picture to Firebase Storage (for current user)
+// @route   POST /api/v1/auth/upload-profile-picture
+// @access  Private (All authenticated users)
+const uploadUserProfilePicture = asyncHandler(async (req, res, next) => {
+  upload.single("profileImage")(req, res, async (err) => {
+    if (err) {
+      return next(new ErrorResponse(`File upload error: ${err.message}`, 400));
+    }
+
+    if (!req.file) {
+      return next(new ErrorResponse("Please upload an image file", 400));
+    }
+
+    try {
+      console.log(
+        `User ${req.user.username} uploading profile picture to Firebase Storage...`
+      );
+
+      // Upload to Firebase Storage
+      const firebaseUrl = await uploadImageToFirebase(
+        req.file,
+        `profile-pictures/${req.user.role.toLowerCase()}s`
+      );
+
+      console.log("Profile picture uploaded successfully:", firebaseUrl);
+
+      // Optionally update user's profile picture in database immediately
+      await User.findByIdAndUpdate(
+        req.user.id,
+        { profilePicture: firebaseUrl },
+        { runValidators: true }
+      );
+
+      res.status(200).json({
+        success: true,
+        message: "Profile picture uploaded and updated successfully",
+        data: {
+          url: firebaseUrl,
+          originalName: req.file.originalname,
+          size: req.file.size,
+          mimetype: req.file.mimetype,
+        },
+      });
+    } catch (error) {
+      console.log("Error uploading profile picture:", error);
+      return next(
+        new ErrorResponse(
+          `Error uploading profile picture: ${error.message}`,
+          500
+        )
+      );
+    }
+  });
+});
 
 // Utility function to sign JWT token
 const signToken = (id) => {
@@ -386,3 +517,6 @@ exports.updateDetails = asyncHandler(async (req, res, next) => {
     data: user,
   });
 });
+
+// Export the new function
+exports.uploadUserProfilePicture = uploadUserProfilePicture;

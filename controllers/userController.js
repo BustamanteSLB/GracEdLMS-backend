@@ -9,38 +9,140 @@ const ExcelJS = require("exceljs");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const { bucket } = require("../config/firebaseService"); // Add Firebase import
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, "../uploads/excel");
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, "users-" + uniqueSuffix + path.extname(file.originalname));
-  },
-});
+// Configure multer for file uploads (updated to handle both Excel and images)
+const storage = multer.memoryStorage(); // Use memory storage for Firebase
 
 const upload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
-    const allowedTypes = [
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
-      "application/vnd.ms-excel", // .xls
-    ];
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
+    if (file.fieldname === "excelFile") {
+      // Excel file validation
+      const allowedTypes = [
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
+        "application/vnd.ms-excel", // .xls
+      ];
+      if (allowedTypes.includes(file.mimetype)) {
+        cb(null, true);
+      } else {
+        cb(new Error("Only Excel files (.xlsx, .xls) are allowed!"), false);
+      }
+    } else if (file.fieldname === "profileImage") {
+      // Image file validation
+      const allowedImageTypes = [
+        "image/jpeg",
+        "image/jpg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+      ];
+      if (allowedImageTypes.includes(file.mimetype)) {
+        cb(null, true);
+      } else {
+        cb(
+          new Error(
+            "Only image files (JPEG, JPG, PNG, GIF, WebP) are allowed for profile pictures!"
+          ),
+          false
+        );
+      }
     } else {
-      cb(new Error("Only Excel files (.xlsx, .xls) are allowed!"), false);
+      cb(new Error("Unexpected field name!"), false);
     }
   },
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB limit
   },
+});
+
+// Helper function to upload image to Firebase Storage
+const uploadImageToFirebase = async (file, folder = "profile-pictures") => {
+  try {
+    const fileName = `${folder}/${Date.now()}-${Math.round(
+      Math.random() * 1e9
+    )}${path.extname(file.originalname)}`;
+    const fileUpload = bucket.file(fileName);
+
+    const stream = fileUpload.createWriteStream({
+      metadata: {
+        contentType: file.mimetype,
+      },
+      public: true, // Make the file publicly accessible
+    });
+
+    return new Promise((resolve, reject) => {
+      stream.on("error", (error) => {
+        console.error("Firebase upload error:", error);
+        reject(error);
+      });
+
+      stream.on("finish", async () => {
+        try {
+          // Make the file public
+          await fileUpload.makePublic();
+
+          // Get the public URL
+          const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+          resolve(publicUrl);
+        } catch (error) {
+          console.error("Error making file public:", error);
+          reject(error);
+        }
+      });
+
+      stream.end(file.buffer);
+    });
+  } catch (error) {
+    console.error("Error uploading to Firebase:", error);
+    throw error;
+  }
+};
+
+// @desc    Upload profile picture to Firebase Storage
+// @route   POST /api/v1/users/upload-profile-picture
+// @access  Private/Admin
+const uploadProfilePicture = asyncHandler(async (req, res, next) => {
+  upload.single("profileImage")(req, res, async (err) => {
+    if (err) {
+      return next(new ErrorResponse(`File upload error: ${err.message}`, 400));
+    }
+
+    if (!req.file) {
+      return next(new ErrorResponse("Please upload an image file", 400));
+    }
+
+    try {
+      console.log("Uploading profile picture to Firebase Storage...");
+
+      // Upload to Firebase Storage
+      const firebaseUrl = await uploadImageToFirebase(
+        req.file,
+        "profile-pictures"
+      );
+
+      console.log("Profile picture uploaded successfully:", firebaseUrl);
+
+      res.status(200).json({
+        success: true,
+        message: "Profile picture uploaded successfully",
+        data: {
+          url: firebaseUrl,
+          originalName: req.file.originalname,
+          size: req.file.size,
+          mimetype: req.file.mimetype,
+        },
+      });
+    } catch (error) {
+      console.error("Error uploading profile picture:", error);
+      return next(
+        new ErrorResponse(
+          `Error uploading profile picture: ${error.message}`,
+          500
+        )
+      );
+    }
+  });
 });
 
 // @desc    Create a new user by Admin
@@ -699,7 +801,7 @@ const createMultipleUsers = asyncHandler(async (req, res, next) => {
   });
 });
 
-// @desc    Create multiple users from Excel file
+// @desc    Create multiple users from Excel file (updated to handle new multer config)
 // @route   POST /api/v1/users/bulk-excel
 // @access  Private/Admin
 const createUsersFromExcel = asyncHandler(async (req, res, next) => {
@@ -713,16 +815,20 @@ const createUsersFromExcel = asyncHandler(async (req, res, next) => {
     }
 
     try {
-      console.log("Processing Excel file:", req.file.path);
+      console.log("Processing Excel file from memory buffer");
+
+      // Create a temporary file from the buffer for ExcelJS
+      const tempFilePath = path.join(__dirname, `../temp-${Date.now()}.xlsx`);
+      fs.writeFileSync(tempFilePath, req.file.buffer);
 
       // Read the Excel file using exceljs
       const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.readFile(req.file.path);
+      await workbook.xlsx.readFile(tempFilePath);
 
       // Get the first worksheet
       const worksheet = workbook.getWorksheet(1);
       if (!worksheet) {
-        fs.unlinkSync(req.file.path);
+        fs.unlinkSync(tempFilePath);
         return next(new ErrorResponse("Excel file has no worksheets", 400));
       }
 
@@ -797,7 +903,7 @@ const createUsersFromExcel = asyncHandler(async (req, res, next) => {
       console.log("Sample data:", jsonData[0]);
 
       if (!jsonData || jsonData.length === 0) {
-        fs.unlinkSync(req.file.path);
+        fs.unlinkSync(tempFilePath);
         return next(
           new ErrorResponse("Excel file is empty or contains no data", 400)
         );
@@ -822,7 +928,7 @@ const createUsersFromExcel = asyncHandler(async (req, res, next) => {
       );
 
       if (missingHeaders.length > 0) {
-        fs.unlinkSync(req.file.path);
+        fs.unlinkSync(tempFilePath);
         return next(
           new ErrorResponse(
             `Excel file is missing required columns: ${missingHeaders.join(
@@ -1015,9 +1121,9 @@ const createUsersFromExcel = asyncHandler(async (req, res, next) => {
         }
       }
 
-      // Clean up uploaded file
-      fs.unlinkSync(req.file.path);
-      console.log("File cleaned up");
+      // Clean up temporary file
+      fs.unlinkSync(tempFilePath);
+      console.log("Temporary file cleaned up");
 
       const success = createdUsers.length > 0;
       const statusCode = success ? (errors.length > 0 ? 207 : 201) : 400;
@@ -1037,10 +1143,17 @@ const createUsersFromExcel = asyncHandler(async (req, res, next) => {
         },
       });
     } catch (error) {
-      // Clean up uploaded file in case of error
-      if (req.file && fs.existsSync(req.file.path)) {
-        fs.unlinkSync(req.file.path);
-      }
+      // Clean up temporary file in case of error
+      const tempFiles = fs
+        .readdirSync(__dirname)
+        .filter((file) => file.startsWith("temp-") && file.endsWith(".xlsx"));
+      tempFiles.forEach((file) => {
+        try {
+          fs.unlinkSync(path.join(__dirname, file));
+        } catch (e) {
+          console.log("Error cleaning temp file:", e.message);
+        }
+      });
 
       console.error("Error processing Excel file:", error);
       return next(
@@ -1050,7 +1163,7 @@ const createUsersFromExcel = asyncHandler(async (req, res, next) => {
   });
 });
 
-// Export all functions
+// Export all functions (add the new function)
 module.exports = {
   createUser,
   getAllUsers,
@@ -1062,4 +1175,5 @@ module.exports = {
   permanentDeleteUser,
   createMultipleUsers,
   createUsersFromExcel,
+  uploadProfilePicture, // Add new export
 };

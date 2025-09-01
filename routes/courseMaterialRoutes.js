@@ -7,28 +7,11 @@ const {
 } = require("../controllers/courseMaterialController");
 const { protect, authorize } = require("../middleware/authMiddleware");
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
 
 const router = express.Router();
 
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, "../uploads");
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-// Configure Multer storage for course materials
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    // Use a temporary filename during upload, will be renamed to original later
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, "temp-" + uniqueSuffix + "-" + file.originalname);
-  },
-});
+// Configure Multer for memory storage (Firebase doesn't need disk storage)
+const storage = multer.memoryStorage();
 
 // Create the multer upload middleware for multiple files
 const upload = multer({
@@ -40,7 +23,7 @@ const upload = multer({
   fileFilter: (req, file, cb) => {
     console.log("File received:", file);
 
-    // Only allow specific file types (added Excel files)
+    // Only allow specific file types
     const allowedMimes = [
       "application/pdf", // PDF
       "application/msword", // DOC
@@ -84,7 +67,9 @@ const upload = multer({
       ".md",
       ".xml",
     ];
-    const fileExtension = path.extname(file.originalname).toLowerCase();
+    const fileExtension = file.originalname
+      .toLowerCase()
+      .substr(file.originalname.lastIndexOf("."));
 
     if (
       allowedMimes.includes(file.mimetype) ||

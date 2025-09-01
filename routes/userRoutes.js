@@ -10,6 +10,7 @@ const {
   permanentDeleteUser,
   createMultipleUsers,
   createUsersFromExcel,
+  uploadProfilePicture, // Add new import
 } = require("../controllers/userController");
 const { protect, authorize } = require("../middleware/authMiddleware");
 
@@ -20,14 +21,19 @@ router.use(protect);
 
 router
   .route("/")
-  .post(authorize('Admin'), createUser) // Create a user
-  .get(authorize('Admin', 'Teacher'), getAllUsers); // Get all users
+  .post(authorize("Admin"), createUser) // Create a user
+  .get(authorize("Admin", "Teacher"), getAllUsers); // Get all users
 
 // Bulk user creation routes
-router.route("/bulk").post(authorize('Admin'), createMultipleUsers); // Keep for backward compatibility
+router.route("/bulk").post(authorize("Admin"), createMultipleUsers); // Keep for backward compatibility
 
 // New Excel bulk import route
-router.route("/bulk-excel").post(authorize('Admin'), createUsersFromExcel);
+router.route("/bulk-excel").post(authorize("Admin"), createUsersFromExcel);
+
+// New profile picture upload route
+router
+  .route("/upload-profile-picture")
+  .post(authorize("Admin"), uploadProfilePicture);
 
 router
   .route("/:id")
@@ -39,9 +45,9 @@ router
   .route("/:id/password") // NEW: Route for updating a user's password by ID
   .put(updateUserPassword);
 
-router.route("/:id/restore").put(authorize('Admin'), restoreUser); // Restore a soft-deleted user
+router.route("/:id/restore").put(authorize("Admin"), restoreUser); // Restore a soft-deleted user
 
 // New route for permanent deletion
-router.route("/:id/permanent").delete(authorize('Admin'), permanentDeleteUser);
+router.route("/:id/permanent").delete(authorize("Admin"), permanentDeleteUser);
 
 module.exports = router;

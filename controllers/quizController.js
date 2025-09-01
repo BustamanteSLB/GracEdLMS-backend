@@ -1,4 +1,4 @@
-// quizControler.js
+// quizController.js
 
 const Quiz = require("../models/Quiz");
 const Subject = require("../models/Subject");
@@ -6,8 +6,7 @@ const User = require("../models/User");
 const asyncHandler = require("../utils/asyncHandler");
 const { ErrorResponse } = require("../utils/errorResponse");
 const mongoose = require("mongoose");
-const fs = require("fs");
-const path = require("path");
+const { bucket } = require("../config/firebaseService");
 const OpenAI = require("openai");
 const mammoth = require("mammoth");
 const pdfParse = require("pdf-parse");
@@ -18,34 +17,34 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Helper function to extract text from different file types
-const extractTextFromFile = async (filePath, mimetype) => {
+// Helper function to extract text from Firebase Storage file
+const extractTextFromBuffer = async (buffer, mimetype) => {
   try {
     if (mimetype === "application/pdf") {
-      const dataBuffer = fs.readFileSync(filePath);
-      const data = await pdfParse(dataBuffer);
+      const data = await pdfParse(buffer);
       return data.text;
     } else if (
       mimetype ===
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
       mimetype === "application/msword"
     ) {
-      const result = await mammoth.extractRawText({ path: filePath });
+      const result = await mammoth.extractRawText({ buffer });
       return result.value;
     } else if (
       mimetype ===
         "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
       mimetype === "application/vnd.ms-powerpoint"
     ) {
-      const data = await officeParser.parseOfficeAsync(filePath);
+      // Note: officeparser might need adjustment for buffer input
+      const data = await officeParser.parseOffice(buffer);
       return data;
     } else if (mimetype === "text/plain") {
-      return fs.readFileSync(filePath, "utf8");
+      return buffer.toString("utf8");
     }
 
     throw new Error("Unsupported file type");
   } catch (error) {
-    console.error("Error extracting text from file:", error);
+    console.error("Error extracting text from buffer:", error);
     throw new Error(`Failed to extract text from file: ${error.message}`);
   }
 };
@@ -168,10 +167,14 @@ exports.generateAIQuiz = asyncHandler(async (req, res, next) => {
   }
 
   try {
-    // Extract text from uploaded file
-    console.log("Extracting text from file:", req.file.originalname);
-    const extractedText = await extractTextFromFile(
-      req.file.path,
+    console.log(
+      "Processing uploaded file for AI quiz generation:",
+      req.file.originalname
+    );
+
+    // Extract text from uploaded file buffer
+    const extractedText = await extractTextFromBuffer(
+      req.file.buffer,
       req.file.mimetype
     );
 
@@ -224,11 +227,6 @@ exports.generateAIQuiz = asyncHandler(async (req, res, next) => {
       "subjectName description gradeLevel section schoolYear"
     );
 
-    // Clean up uploaded file
-    if (fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-
     res.status(201).json({
       success: true,
       message: `Successfully generated ${aiQuestions.length} questions from uploaded file`,
@@ -236,12 +234,6 @@ exports.generateAIQuiz = asyncHandler(async (req, res, next) => {
     });
   } catch (error) {
     console.error("Error in AI quiz generation:", error);
-
-    // Clean up uploaded file on error
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-
     return next(
       new ErrorResponse(error.message || "Failed to generate AI quiz", 500)
     );
@@ -271,9 +263,53 @@ exports.createQuiz = asyncHandler(async (req, res, next) => {
   // Process uploaded images
   const imageMap = {};
   if (req.files && req.files.length > 0) {
-    req.files.forEach((file) => {
-      imageMap[file.originalname] = `/uploads/quiz-images/${file.filename}`;
-    });
+    console.log("Processing", req.files.length, "uploaded images");
+
+    for (const file of req.files) {
+      try {
+        // Create Firebase Storage path
+        const firebasePath = `quiz-images/${subject}/${Date.now()}-${
+          file.originalname
+        }`;
+        const firebaseFile = bucket.file(firebasePath);
+
+        // Upload to Firebase Storage
+        const stream = firebaseFile.createWriteStream({
+          metadata: {
+            contentType: file.mimetype,
+            metadata: {
+              originalName: file.originalname,
+              uploadedBy: req.user.id,
+              subjectId: subject,
+              quizTitle: title,
+            },
+          },
+        });
+
+        await new Promise((resolve, reject) => {
+          stream.on("error", reject);
+          stream.on("finish", resolve);
+          stream.end(file.buffer);
+        });
+
+        // Make file publicly accessible
+        await firebaseFile.makePublic();
+
+        // Get the public URL
+        const publicUrl = `https://storage.googleapis.com/${bucket.name}/${firebasePath}`;
+
+        // Map original filename to Firebase URL
+        imageMap[file.originalname] = publicUrl;
+
+        console.log(`Uploaded image: ${file.originalname} -> ${publicUrl}`);
+      } catch (uploadError) {
+        console.error(
+          `Failed to upload image ${file.originalname}:`,
+          uploadError
+        );
+        // Continue with other files even if one fails
+      }
+    }
   }
 
   // Parse questions and map images
@@ -317,6 +353,192 @@ exports.createQuiz = asyncHandler(async (req, res, next) => {
   res.status(201).json({
     success: true,
     data: quiz,
+  });
+});
+
+// @desc    Update quiz
+// @route   PUT /api/v1/quizzes/:id
+// @access  Private/Teacher,Admin
+exports.updateQuiz = asyncHandler(async (req, res, next) => {
+  let quiz = await Quiz.findById(req.params.id);
+
+  if (!quiz) {
+    return next(new ErrorResponse("Quiz not found", 404));
+  }
+
+  // Check permissions
+  if (
+    req.user.role === "Teacher" &&
+    quiz.createdBy.toString() !== req.user.id
+  ) {
+    return next(new ErrorResponse("Not authorized to update this quiz", 403));
+  }
+
+  const {
+    title,
+    sectionHeader,
+    sectionDescription,
+    questions,
+    timeLimit,
+    quarter,
+    status,
+  } = req.body;
+
+  // Process uploaded images
+  const imageMap = {};
+  if (req.files && req.files.length > 0) {
+    console.log("Processing", req.files.length, "uploaded images for update");
+
+    for (const file of req.files) {
+      try {
+        // Create Firebase Storage path
+        const firebasePath = `quiz-images/${quiz.subject}/${Date.now()}-${
+          file.originalname
+        }`;
+        const firebaseFile = bucket.file(firebasePath);
+
+        // Upload to Firebase Storage
+        const stream = firebaseFile.createWriteStream({
+          metadata: {
+            contentType: file.mimetype,
+            metadata: {
+              originalName: file.originalname,
+              uploadedBy: req.user.id,
+              subjectId: quiz.subject.toString(),
+              quizId: quiz._id.toString(),
+            },
+          },
+        });
+
+        await new Promise((resolve, reject) => {
+          stream.on("error", reject);
+          stream.on("finish", resolve);
+          stream.end(file.buffer);
+        });
+
+        // Make file publicly accessible
+        await firebaseFile.makePublic();
+
+        // Get the public URL
+        const publicUrl = `https://storage.googleapis.com/${bucket.name}/${firebasePath}`;
+
+        // Map original filename to Firebase URL
+        imageMap[file.originalname] = publicUrl;
+
+        console.log(`Uploaded image: ${file.originalname} -> ${publicUrl}`);
+      } catch (uploadError) {
+        console.error(
+          `Failed to upload image ${file.originalname}:`,
+          uploadError
+        );
+      }
+    }
+  }
+
+  // Parse questions and map images
+  let parsedQuestions = quiz.questions;
+  if (questions) {
+    parsedQuestions = JSON.parse(questions).map((question) => {
+      if (question.images && question.images.length > 0) {
+        question.images = question.images.map(
+          (imageName) => imageMap[imageName] || imageName
+        );
+      }
+      return question;
+    });
+  }
+
+  // Calculate total quiz points
+  const quizPoints = parsedQuestions.reduce(
+    (total, question) => total + (question.itemPoints || 1),
+    0
+  );
+
+  // Update quiz
+  quiz = await Quiz.findByIdAndUpdate(
+    req.params.id,
+    {
+      title: title || quiz.title,
+      sectionHeader:
+        sectionHeader !== undefined ? sectionHeader : quiz.sectionHeader,
+      sectionDescription:
+        sectionDescription !== undefined
+          ? sectionDescription
+          : quiz.sectionDescription,
+      questions: parsedQuestions,
+      timeLimit: timeLimit ? parseInt(timeLimit) : quiz.timeLimit,
+      quarter: quarter || quiz.quarter,
+      quizPoints,
+      status: status || quiz.status,
+    },
+    { new: true, runValidators: true }
+  );
+
+  await quiz.populate("createdBy", "firstName lastName email");
+  await quiz.populate(
+    "subject",
+    "subjectName description gradeLevel section schoolYear"
+  );
+
+  res.status(200).json({
+    success: true,
+    data: quiz,
+  });
+});
+
+// @desc    Delete quiz
+// @route   DELETE /api/v1/quizzes/:id
+// @access  Private/Teacher,Admin
+exports.deleteQuiz = asyncHandler(async (req, res, next) => {
+  const quiz = await Quiz.findById(req.params.id);
+
+  if (!quiz) {
+    return next(new ErrorResponse("Quiz not found", 404));
+  }
+
+  // Check permissions
+  if (
+    req.user.role === "Teacher" &&
+    quiz.createdBy.toString() !== req.user.id
+  ) {
+    return next(new ErrorResponse("Not authorized to delete this quiz", 403));
+  }
+
+  // Delete associated images from Firebase Storage
+  if (quiz.questions && quiz.questions.length > 0) {
+    for (const question of quiz.questions) {
+      if (question.images && question.images.length > 0) {
+        for (const imageUrl of question.images) {
+          try {
+            // Extract Firebase path from URL
+            if (imageUrl.includes("storage.googleapis.com")) {
+              const urlParts = imageUrl.split("/");
+              const pathIndex = urlParts.findIndex(
+                (part) => part === bucket.name
+              );
+              if (pathIndex !== -1 && urlParts[pathIndex + 1]) {
+                const firebasePath = decodeURIComponent(
+                  urlParts.slice(pathIndex + 1).join("/")
+                );
+                const file = bucket.file(firebasePath);
+                await file.delete();
+                console.log(`Deleted image from Firebase: ${firebasePath}`);
+              }
+            }
+          } catch (deleteError) {
+            console.error(`Failed to delete image ${imageUrl}:`, deleteError);
+            // Continue deleting other images even if one fails
+          }
+        }
+      }
+    }
+  }
+
+  await quiz.deleteOne();
+
+  res.status(200).json({
+    success: true,
+    data: {},
   });
 });
 
@@ -395,133 +617,6 @@ exports.getQuiz = asyncHandler(async (req, res, next) => {
   res.status(200).json({
     success: true,
     data: quiz,
-  });
-});
-
-// @desc    Update quiz
-// @route   PUT /api/v1/quizzes/:id
-// @access  Private/Teacher,Admin
-exports.updateQuiz = asyncHandler(async (req, res, next) => {
-  let quiz = await Quiz.findById(req.params.id);
-
-  if (!quiz) {
-    return next(new ErrorResponse("Quiz not found", 404));
-  }
-
-  // Check permissions
-  if (
-    req.user.role === "Teacher" &&
-    quiz.createdBy.toString() !== req.user.id
-  ) {
-    return next(new ErrorResponse("Not authorized to update this quiz", 403));
-  }
-
-  const {
-    title,
-    sectionHeader,
-    sectionDescription,
-    questions,
-    timeLimit,
-    quarter,
-    status,
-  } = req.body;
-
-  // Process uploaded images
-  const imageMap = {};
-  if (req.files && req.files.length > 0) {
-    req.files.forEach((file) => {
-      imageMap[file.originalname] = `/uploads/quiz-images/${file.filename}`;
-    });
-  }
-
-  // Parse questions and map images
-  let parsedQuestions = quiz.questions;
-  if (questions) {
-    parsedQuestions = JSON.parse(questions).map((question) => {
-      if (question.images && question.images.length > 0) {
-        question.images = question.images.map(
-          (imageName) => imageMap[imageName] || imageName
-        );
-      }
-      return question;
-    });
-  }
-
-  // Calculate total quiz points
-  const quizPoints = parsedQuestions.reduce(
-    (total, question) => total + (question.itemPoints || 1),
-    0
-  );
-
-  // Update quiz
-  quiz = await Quiz.findByIdAndUpdate(
-    req.params.id,
-    {
-      title: title || quiz.title,
-      sectionHeader:
-        sectionHeader !== undefined ? sectionHeader : quiz.sectionHeader,
-      sectionDescription:
-        sectionDescription !== undefined
-          ? sectionDescription
-          : quiz.sectionDescription,
-      questions: parsedQuestions,
-      timeLimit: timeLimit ? parseInt(timeLimit) : quiz.timeLimit,
-      quarter: quarter || quiz.quarter,
-      quizPoints,
-      status: status || quiz.status,
-    },
-    { new: true, runValidators: true }
-  );
-
-  await quiz.populate("createdBy", "firstName lastName email");
-  await quiz.populate(
-    "subject",
-    "subjectName description gradeLevel section schoolYear"
-  );
-
-  res.status(200).json({
-    success: true,
-    data: quiz,
-  });
-});
-
-// @desc    Delete quiz
-// @route   DELETE /api/v1/quizzes/:id
-// @access  Private/Teacher,Admin
-exports.deleteQuiz = asyncHandler(async (req, res, next) => {
-  const quiz = await Quiz.findById(req.params.id);
-
-  if (!quiz) {
-    return next(new ErrorResponse("Quiz not found", 404));
-  }
-
-  // Check permissions
-  if (
-    req.user.role === "Teacher" &&
-    quiz.createdBy.toString() !== req.user.id
-  ) {
-    return next(new ErrorResponse("Not authorized to delete this quiz", 403));
-  }
-
-  // Delete associated images
-  if (quiz.questions && quiz.questions.length > 0) {
-    quiz.questions.forEach((question) => {
-      if (question.images && question.images.length > 0) {
-        question.images.forEach((imagePath) => {
-          const fullPath = path.join(__dirname, "..", imagePath);
-          if (fs.existsSync(fullPath)) {
-            fs.unlinkSync(fullPath);
-          }
-        });
-      }
-    });
-  }
-
-  await quiz.deleteOne();
-
-  res.status(200).json({
-    success: true,
-    data: {},
   });
 });
 

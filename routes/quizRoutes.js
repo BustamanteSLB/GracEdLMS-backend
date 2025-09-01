@@ -16,47 +16,18 @@ const {
 } = require("../controllers/quizController");
 const { protect, authorize } = require("../middleware/authMiddleware");
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
 
 const router = express.Router();
 
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, "../uploads/quiz-images");
-const docsDir = path.join(__dirname, "../uploads/documents");
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-if (!fs.existsSync(docsDir)) {
-  fs.mkdirSync(docsDir, { recursive: true });
-}
+// Configure Multer for memory storage (Firebase doesn't need disk storage)
+const storage = multer.memoryStorage();
 
 // Configure Multer for quiz question images
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    // Keep original filename as specified
-    cb(null, file.originalname);
-  },
-});
-
-// Configure Multer for document uploads (AI quiz generation)
-const docStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, docsDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  },
-});
-
 const upload = multer({
   storage: storage,
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB limit
+    files: 20, // Maximum 20 images
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"];
@@ -68,8 +39,9 @@ const upload = multer({
   },
 });
 
+// Configure Multer for document uploads (AI quiz generation)
 const uploadDoc = multer({
-  storage: docStorage,
+  storage: storage,
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB limit for documents
   },
@@ -93,6 +65,38 @@ const uploadDoc = multer({
   },
 });
 
+// Middleware to handle multer errors
+const handleMulterError = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "File too large. Maximum size is 5MB for images, 10MB for documents.",
+      });
+    }
+    if (err.code === "LIMIT_FILE_COUNT") {
+      return res.status(400).json({
+        success: false,
+        message: "Too many files. Maximum 20 images allowed.",
+      });
+    }
+  }
+
+  if (
+    err.message &&
+    (err.message.includes("Only image files") ||
+      err.message.includes("Only PDF, Word"))
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: err.message,
+    });
+  }
+
+  next(err);
+};
+
 router.use(protect);
 
 // AI Quiz Generation route
@@ -100,6 +104,7 @@ router.post(
   "/generate-ai",
   authorize("Teacher", "Admin"),
   uploadDoc.single("document"),
+  handleMulterError,
   generateAIQuiz
 );
 
@@ -110,6 +115,7 @@ router
   .post(
     authorize("Teacher", "Admin"),
     upload.array("questionImages", 20),
+    handleMulterError,
     createQuiz
   );
 
@@ -119,6 +125,7 @@ router
   .put(
     authorize("Teacher", "Admin"),
     upload.array("questionImages", 20),
+    handleMulterError,
     updateQuiz
   )
   .delete(authorize("Teacher", "Admin"), deleteQuiz);

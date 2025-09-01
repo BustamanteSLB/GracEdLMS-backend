@@ -4,31 +4,18 @@ const Subject = require("../models/Subject");
 const User = require("../models/User");
 const asyncHandler = require("../utils/asyncHandler");
 const { ErrorResponse } = require("../utils/errorResponse");
-const path = require("path");
-const fs = require("fs");
+const { bucket } = require("../config/firebaseService");
 
 // @desc    Upload course materials for a subject (multiple files)
 // @route   POST /api/v1/subjects/:subjectId/courseMaterials
 // @access  Private/Teacher (assigned to the subject) or Private/Admin
 exports.createCourseMaterial = asyncHandler(async (req, res, next) => {
   const { subjectId } = req.params;
-  const uploadedFiles = req.files; // Changed from req.file to req.files for multiple uploads
+  const uploadedFiles = req.files;
 
   console.log("Request files:", uploadedFiles);
 
   if (!mongoose.Types.ObjectId.isValid(subjectId)) {
-    // Clean up any uploaded files
-    if (uploadedFiles && uploadedFiles.length > 0) {
-      uploadedFiles.forEach((file) => {
-        try {
-          if (file.path && fs.existsSync(file.path)) {
-            fs.unlinkSync(file.path);
-          }
-        } catch (err) {
-          console.error("Error deleting file:", err);
-        }
-      });
-    }
     return next(
       new ErrorResponse(`Invalid subject ID format: ${subjectId}`, 400)
     );
@@ -40,18 +27,6 @@ exports.createCourseMaterial = asyncHandler(async (req, res, next) => {
 
   const subject = await Subject.findById(subjectId);
   if (!subject) {
-    // Clean up uploaded files
-    if (uploadedFiles && uploadedFiles.length > 0) {
-      uploadedFiles.forEach((file) => {
-        try {
-          if (file.path && fs.existsSync(file.path)) {
-            fs.unlinkSync(file.path);
-          }
-        } catch (err) {
-          console.error("Error deleting file:", err);
-        }
-      });
-    }
     return next(
       new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
     );
@@ -62,18 +37,6 @@ exports.createCourseMaterial = asyncHandler(async (req, res, next) => {
     req.user.role === "Teacher" &&
     (!subject.teacher || subject.teacher.toString() !== req.user.id)
   ) {
-    // Clean up uploaded files
-    if (uploadedFiles && uploadedFiles.length > 0) {
-      uploadedFiles.forEach((file) => {
-        try {
-          if (file.path && fs.existsSync(file.path)) {
-            fs.unlinkSync(file.path);
-          }
-        } catch (err) {
-          console.error("Error deleting file:", err);
-        }
-      });
-    }
     return next(
       new ErrorResponse(
         "Not authorized to upload materials to this subject",
@@ -93,7 +56,7 @@ exports.createCourseMaterial = asyncHandler(async (req, res, next) => {
       const fileExtension =
         originalFileName.split(".").pop()?.toLowerCase() || "";
 
-      // Map file extensions to types (added Excel file types)
+      // Map file extensions to types
       const extensionMap = {
         pdf: "pdf",
         doc: "doc",
@@ -124,31 +87,48 @@ exports.createCourseMaterial = asyncHandler(async (req, res, next) => {
         fileName: originalFileName,
       });
 
+      // Create Firebase Storage path
+      const firebasePath = `course-materials/${subjectId}/${originalFileName}`;
+      const file = bucket.file(firebasePath);
+
+      // Upload to Firebase Storage
+      const stream = file.createWriteStream({
+        metadata: {
+          contentType: uploadedFile.mimetype,
+          metadata: {
+            originalName: originalFileName,
+            uploadedBy: req.user.id,
+            subjectId: subjectId,
+          },
+        },
+      });
+
+      await new Promise((resolve, reject) => {
+        stream.on("error", reject);
+        stream.on("finish", resolve);
+        stream.end(uploadedFile.buffer);
+      });
+
+      // Make file publicly accessible
+      await file.makePublic();
+
+      // Get the public URL
+      const publicUrl = `https://storage.googleapis.com/${bucket.name}/${firebasePath}`;
+
       if (existingMaterial) {
-        // Replace existing file
-        const oldFilePath = path.join(
-          __dirname,
-          "../uploads",
-          existingMaterial.fileName
-        );
+        // Delete old file from Firebase Storage
         try {
-          if (fs.existsSync(oldFilePath)) {
-            fs.unlinkSync(oldFilePath);
-          }
+          const oldFile = bucket.file(
+            `course-materials/${subjectId}/${existingMaterial.fileName}`
+          );
+          await oldFile.delete();
         } catch (err) {
-          console.error("Error deleting old file:", err);
+          console.error("Error deleting old file from Firebase:", err);
         }
 
-        // Move new file to use original filename
-        const newFilePath = path.join(
-          __dirname,
-          "../uploads",
-          originalFileName
-        );
-        fs.renameSync(uploadedFile.path, newFilePath);
-
         // Update existing material
-        existingMaterial.fileUrl = `/uploads/${originalFileName}`;
+        existingMaterial.fileUrl = publicUrl;
+        existingMaterial.firebasePath = firebasePath;
         existingMaterial.fileType = materialFileType;
         existingMaterial.fileSize = uploadedFile.size;
         existingMaterial.uploadedBy = req.user.id;
@@ -163,16 +143,10 @@ exports.createCourseMaterial = asyncHandler(async (req, res, next) => {
         replacedMaterials.push(existingMaterial);
       } else {
         // Create new material
-        const newFilePath = path.join(
-          __dirname,
-          "../uploads",
-          originalFileName
-        );
-        fs.renameSync(uploadedFile.path, newFilePath);
-
         const courseMaterial = await CourseMaterial.create({
           fileName: originalFileName,
-          fileUrl: `/uploads/${originalFileName}`,
+          fileUrl: publicUrl,
+          firebasePath: firebasePath,
           fileType: materialFileType,
           fileSize: uploadedFile.size,
           subject: subjectId,
@@ -196,15 +170,6 @@ exports.createCourseMaterial = asyncHandler(async (req, res, next) => {
         fileName: uploadedFile.originalname,
         error: error.message,
       });
-
-      // Clean up the failed file
-      try {
-        if (uploadedFile.path && fs.existsSync(uploadedFile.path)) {
-          fs.unlinkSync(uploadedFile.path);
-        }
-      } catch (err) {
-        console.error("Error deleting failed file:", err);
-      }
     }
   }
 
@@ -358,14 +323,15 @@ exports.deleteCourseMaterial = asyncHandler(async (req, res, next) => {
     );
   }
 
-  // Delete the physical file
-  const filePath = path.join(__dirname, "../uploads", courseMaterial.fileName);
+  // Delete the file from Firebase Storage
   try {
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    if (courseMaterial.firebasePath) {
+      const file = bucket.file(courseMaterial.firebasePath);
+      await file.delete();
     }
   } catch (err) {
-    console.error("Error deleting file:", err);
+    console.error("Error deleting file from Firebase Storage:", err);
+    // Continue with database deletion even if Firebase deletion fails
   }
 
   // Remove from subject's courseMaterials array

@@ -1,7 +1,5 @@
 const express = require("express");
-const path = require("path");
 const multer = require("multer");
-const fs = require("fs");
 const {
   createActivity,
   getActivitiesForSubject,
@@ -17,40 +15,15 @@ const { protect } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-// Helper function to generate unique filename
-const generateUniqueFilename = (originalName, uploadDir) => {
-  const extension = path.extname(originalName);
-  const nameWithoutExt = path.basename(originalName, extension);
+// Configure Multer for memory storage (Firebase doesn't need disk storage)
+const storage = multer.memoryStorage();
 
-  let finalName = originalName;
-  let counter = 1;
-
-  // Check if file exists and increment counter until we find a unique name
-  while (fs.existsSync(path.join(uploadDir, finalName))) {
-    finalName = `${nameWithoutExt} (${counter})${extension}`;
-    counter++;
-  }
-
-  return finalName;
-};
-
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, "uploads/");
-  },
-  filename: function (req, file, cb) {
-    // Keep original filename, add suffix if file exists
-    const uploadDir = "uploads/";
-    const uniqueFilename = generateUniqueFilename(file.originalname, uploadDir);
-    cb(null, uniqueFilename);
-  },
-});
-
+// Configure Multer for activity attachments
 const upload = multer({
   storage: storage,
   limits: {
     fileSize: 50 * 1024 * 1024, // 50MB limit
+    files: 10, // Maximum 10 files for submissions
   },
   fileFilter: function (req, file, cb) {
     console.log("📁 File filter check:", {
@@ -70,10 +43,11 @@ const upload = multer({
       "image/jpg",
       "image/png",
       "image/gif",
+      "image/webp",
     ];
 
     const allowedExtensions =
-      /\.(pdf|doc|docx|ppt|pptx|txt|jpg|jpeg|png|gif)$/i;
+      /\.(pdf|doc|docx|ppt|pptx|txt|jpg|jpeg|png|gif|webp)$/i;
 
     const mimetypeAllowed = allowedMimeTypes.includes(file.mimetype);
     const extensionAllowed = allowedExtensions.test(file.originalname);
@@ -97,11 +71,39 @@ const upload = multer({
   },
 });
 
+// Middleware to handle multer errors
+const handleMulterError = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({
+        success: false,
+        message: "File too large. Maximum size is 50MB.",
+      });
+    }
+    if (err.code === "LIMIT_FILE_COUNT") {
+      return res.status(400).json({
+        success: false,
+        message: "Too many files. Maximum 10 files allowed.",
+      });
+    }
+  }
+
+  if (err.message && err.message.includes("File type not allowed")) {
+    return res.status(400).json({
+      success: false,
+      message: err.message,
+    });
+  }
+
+  next(err);
+};
+
 // Routes
 router.post(
   "/subjects/:subjectId/activities",
   protect,
   upload.single("attachment"),
+  handleMulterError,
   createActivity
 );
 router.get("/subjects/:subjectId/activities", protect, getActivitiesForSubject);
@@ -110,6 +112,7 @@ router.put(
   "/activities/:activityId",
   protect,
   upload.single("attachment"),
+  handleMulterError,
   updateActivity
 );
 router.delete("/activities/:activityId", protect, deleteActivity);
@@ -123,7 +126,8 @@ router.get(
 router.post(
   "/activities/:activityId/turn-in",
   protect,
-  upload.array("submissionAttachments"),
+  upload.array("submissionAttachments", 10),
+  handleMulterError,
   turnInActivity
 );
 router.post(

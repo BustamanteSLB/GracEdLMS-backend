@@ -12,6 +12,7 @@ dotenv.config();
 // Connect to database
 connectDB();
 
+const analyticsRoutes    = require('./routes/analyticsRoutes');
 const authRoutes         = require("./routes/authRoutes");
 const userRoutes         = require("./routes/userRoutes");
 const discussionRoutes   = require("./routes/discussionRoutes");
@@ -48,15 +49,16 @@ app.use(cors());
 
 // ─── SERVE STATIC FILES FROM UPLOADS DIRECTORY ─────────────────────────────────
 // This is what you're missing! Add this line:
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Optional: Add logging for file requests
-app.use('/uploads', (req, res, next) => {
-  console.log(`📁 File request: ${req.originalUrl}`);
-  next();
-});
+// app.use('/uploads', (req, res, next) => {
+  // console.log(`📁 File request: ${req.originalUrl}`);
+  // next();
+//});
 
 // ─── Mount routers ─────────────────────────────────────────────────────────────
+app.use('/api/v1/analytics', analyticsRoutes);
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/users", userRoutes);
 app.use("/api/v1", discussionRoutes);
@@ -93,5 +95,3 @@ const server = app.listen(PORT, async () => {
     }
   }, 3000); // Wait 3 seconds after server start to ensure DB connection is ready
 });
-
-

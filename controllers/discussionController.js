@@ -26,7 +26,9 @@ exports.createDiscussion = asyncHandler(async (req, res, next) => {
   // 2) Ensure the subject exists
   const subject = await Subject.findById(subjectId);
   if (!subject) {
-    return next(new ErrorResponse(`Subject not found with ID ${subjectId}`, 404));
+    return next(
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+    );
   }
 
   // 3) Authorization: Only the assigned teacher or Admin may create discussions
@@ -92,7 +94,9 @@ exports.getDiscussionsForSubject = asyncHandler(async (req, res, next) => {
   // 2) Ensure the subject exists
   const subject = await Subject.findById(subjectId);
   if (!subject) {
-    return next(new ErrorResponse(`Subject not found with ID ${subjectId}`, 404));
+    return next(
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+    );
   }
 
   // 3) Authorization: only enrolled students, subject teacher, or admin
@@ -113,15 +117,17 @@ exports.getDiscussionsForSubject = asyncHandler(async (req, res, next) => {
     );
   }
 
-  // 4) Fetch + populate author and comments.author
+  // 4) Fetch + populate author and comments.author with profilePicture
   const discussions = await Discussion.find({ subject: subjectId })
     .populate({
       path: "author",
-      select: "firstName middleName lastName email username role",
+      select:
+        "firstName middleName lastName email username role profilePicture", // Added profilePicture
     })
     .populate({
       path: "comments.author",
-      select: "firstName middleName lastName email username role",
+      select:
+        "firstName middleName lastName email username role profilePicture", // Added profilePicture
     })
     .sort("-createdAt");
 
@@ -151,16 +157,18 @@ exports.getDiscussion = asyncHandler(async (req, res, next) => {
       select: "subjectCode subjectName description teacher students",
       populate: {
         path: "teacher students",
-        select: "firstName lastName username role",
+        select: "firstName lastName username role profilePicture", // Added profilePicture
       },
     })
     .populate({
       path: "author",
-      select: "firstName middleName lastName email username role",
+      select:
+        "firstName middleName lastName email username role profilePicture", // Added profilePicture
     })
     .populate({
       path: "comments.author",
-      select: "firstName middleName lastName email username role",
+      select:
+        "firstName middleName lastName email username role profilePicture", // Added profilePicture
     });
 
   if (!discussion) {
@@ -211,7 +219,8 @@ exports.updateDiscussion = asyncHandler(async (req, res, next) => {
   // 3) Authorization: only discussion author, subject teacher, or admin
   const isAuthor = discussion.author.equals(req.user.id);
   const isTeacherOfSubject =
-    discussion.subject.teacher && discussion.subject.teacher.equals(req.user.id);
+    discussion.subject.teacher &&
+    discussion.subject.teacher.equals(req.user.id);
   const isAdmin = req.user.role === "Admin";
   if (!isAuthor && !isTeacherOfSubject && !isAdmin) {
     return next(
@@ -233,15 +242,15 @@ exports.updateDiscussion = asyncHandler(async (req, res, next) => {
   // 5) Save changes
   await discussion.save();
 
-  // 6) Re‐fetch + populate author and comments.author
+  // 6) Re‐fetch + populate author and comments.author with profilePicture
   const updatedDiscussion = await Discussion.findById(id)
     .populate({
       path: "author",
-      select: "firstName middleName lastName username role",
+      select: "firstName middleName lastName username role profilePicture", // Added profilePicture
     })
     .populate({
       path: "comments.author",
-      select: "firstName middleName lastName username role",
+      select: "firstName middleName lastName username role profilePicture", // Added profilePicture
     });
 
   // 7) Return the updated discussion
@@ -274,7 +283,8 @@ exports.deleteDiscussion = asyncHandler(async (req, res, next) => {
   // 3) Authorization: only discussion author, subject teacher, or admin
   const isAuthor = discussion.author.equals(req.user.id);
   const isTeacherOfSubject =
-    discussion.subject.teacher && discussion.subject.teacher.equals(req.user.id);
+    discussion.subject.teacher &&
+    discussion.subject.teacher.equals(req.user.id);
   const isAdmin = req.user.role === "Admin";
   if (!isAuthor && !isTeacherOfSubject && !isAdmin) {
     return next(
@@ -355,15 +365,15 @@ exports.addCommentToDiscussion = asyncHandler(async (req, res, next) => {
   });
   await discussion.save();
 
-  // 5) Re‐fetch populated discussion
+  // 5) Re‐fetch populated discussion with profilePicture
   const updatedDiscussion = await Discussion.findById(discussionId)
     .populate({
       path: "author",
-      select: "firstName middleName lastName username role",
+      select: "firstName middleName lastName username role profilePicture", // Added profilePicture
     })
     .populate({
       path: "comments.author",
-      select: "firstName middleName lastName username role",
+      select: "firstName middleName lastName username role profilePicture", // Added profilePicture
     });
 
   // 6) Return the updated discussion
@@ -380,6 +390,13 @@ exports.updateCommentInDiscussion = asyncHandler(async (req, res, next) => {
   const { discussionId, commentId } = req.params;
   const { content } = req.body;
 
+  console.log("=== UPDATE COMMENT REQUEST ===");
+  console.log("Discussion ID:", discussionId);
+  console.log("Comment ID:", commentId);
+  console.log("User ID:", req.user.id);
+  console.log("User Role:", req.user.role);
+  console.log("New content:", content);
+
   // 1) Validate IDs & payload
   if (
     !mongoose.Types.ObjectId.isValid(discussionId) ||
@@ -389,7 +406,7 @@ exports.updateCommentInDiscussion = asyncHandler(async (req, res, next) => {
       new ErrorResponse("Invalid discussion or comment ID format", 400)
     );
   }
-  if (!content) {
+  if (!content || content.trim() === "") {
     return next(new ErrorResponse("Comment content cannot be empty", 400));
   }
 
@@ -415,11 +432,25 @@ exports.updateCommentInDiscussion = asyncHandler(async (req, res, next) => {
     );
   }
 
+  console.log("Comment found:", {
+    id: comment._id,
+    author: comment.author,
+    currentContent: comment.content,
+  });
+
   // 4) Authorization: only comment author, subject teacher, or admin
-  const isCommentAuthor = comment.author.equals(req.user.id);
+  const isCommentAuthor = comment.author.toString() === req.user.id;
   const isTeacherOfSubject =
-    discussion.subject.teacher && discussion.subject.teacher.equals(req.user.id);
+    discussion.subject.teacher &&
+    discussion.subject.teacher.toString() === req.user.id;
   const isAdmin = req.user.role === "Admin";
+
+  console.log("Authorization check:", {
+    isCommentAuthor,
+    isTeacherOfSubject,
+    isAdmin,
+  });
+
   if (!isCommentAuthor && !isTeacherOfSubject && !isAdmin) {
     return next(
       new ErrorResponse("You are not authorized to update this comment.", 403)
@@ -427,24 +458,27 @@ exports.updateCommentInDiscussion = asyncHandler(async (req, res, next) => {
   }
 
   // 5) Apply update
-  comment.content = content;
+  comment.content = content.trim();
   await discussion.save();
 
-  // 6) Re‐fetch populated discussion
+  console.log("Comment updated successfully");
+
+  // 6) Re‐fetch populated discussion with profilePicture
   const updatedDiscussion = await Discussion.findById(discussionId)
     .populate({
       path: "author",
-      select: "firstName middleName lastName username role",
+      select: "firstName middleName lastName username role profilePicture", // Added profilePicture
     })
     .populate({
       path: "comments.author",
-      select: "firstName middleName lastName username role",
+      select: "firstName middleName lastName username role profilePicture", // Added profilePicture
     });
 
   // 7) Return the updated discussion
   res.status(200).json({
     success: true,
     data: updatedDiscussion,
+    message: "Comment updated successfully",
   });
 });
 
@@ -557,11 +591,13 @@ exports.deleteCommentFromDiscussion = asyncHandler(async (req, res, next) => {
     const updatedDiscussion = await Discussion.findById(discussionId)
       .populate({
         path: "author",
-        select: "firstName middleName lastName username role email",
+        select:
+          "firstName middleName lastName username role email profilePicture", // Added profilePicture
       })
       .populate({
         path: "comments.author",
-        select: "firstName middleName lastName username role email",
+        select:
+          "firstName middleName lastName username role email profilePicture", // Added profilePicture
       });
 
     console.log("Updated discussion fetched:", {

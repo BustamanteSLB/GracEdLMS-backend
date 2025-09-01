@@ -8,11 +8,84 @@ const Subject = require("../models/Subject");
 const Grade = require("../models/Grade");
 const asyncHandler = require("../utils/asyncHandler");
 const { ErrorResponse } = require("../utils/errorResponse");
+const { bucket } = require("../config/firebaseService");
+
+// Helper function to upload file to Firebase Storage
+const uploadFileToFirebase = async (
+  fileBuffer,
+  originalName,
+  mimetype,
+  metadata = {}
+) => {
+  try {
+    // Create Firebase Storage path
+    const timestamp = Date.now();
+    const firebasePath = `activity-files/${timestamp}-${originalName}`;
+    const firebaseFile = bucket.file(firebasePath);
+
+    // Upload to Firebase Storage
+    const stream = firebaseFile.createWriteStream({
+      metadata: {
+        contentType: mimetype,
+        metadata: {
+          originalName,
+          uploadedAt: new Date().toISOString(),
+          ...metadata,
+        },
+      },
+    });
+
+    await new Promise((resolve, reject) => {
+      stream.on("error", reject);
+      stream.on("finish", resolve);
+      stream.end(fileBuffer);
+    });
+
+    // Make file publicly accessible
+    await firebaseFile.makePublic();
+
+    // Get the public URL
+    const publicUrl = `https://storage.googleapis.com/${bucket.name}/${firebasePath}`;
+
+    console.log(
+      `📎 File uploaded to Firebase: ${originalName} -> ${publicUrl}`
+    );
+    return publicUrl;
+  } catch (error) {
+    console.error(`Failed to upload file ${originalName} to Firebase:`, error);
+    throw new Error(`Firebase upload failed: ${error.message}`);
+  }
+};
+
+// Helper function to delete file from Firebase Storage
+const deleteFileFromFirebase = async (fileUrl) => {
+  try {
+    if (!fileUrl || !fileUrl.includes("storage.googleapis.com")) {
+      return; // Not a Firebase URL, skip deletion
+    }
+
+    // Extract Firebase path from URL
+    const urlParts = fileUrl.split("/");
+    const pathIndex = urlParts.findIndex((part) => part === bucket.name);
+    if (pathIndex !== -1 && urlParts[pathIndex + 1]) {
+      const firebasePath = decodeURIComponent(
+        urlParts.slice(pathIndex + 1).join("/")
+      );
+      const file = bucket.file(firebasePath);
+      await file.delete();
+      console.log(`🗑️ Deleted file from Firebase: ${firebasePath}`);
+    }
+  } catch (error) {
+    console.error(`Failed to delete file from Firebase:`, error);
+    // Don't throw error, just log it as file might already be deleted
+  }
+};
 
 // Create a new activity for a subject
 exports.createActivity = asyncHandler(async (req, res, next) => {
   const { subjectId } = req.params;
-  const { title, description, visibleDate, deadline, quarter, points } = req.body;
+  const { title, description, visibleDate, deadline, quarter, points } =
+    req.body;
 
   console.log("➡️ Create Activity Request:", {
     subjectId,
@@ -25,11 +98,9 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
     hasFile: !!req.file,
     file: req.file
       ? {
-          filename: req.file.filename,
           originalname: req.file.originalname,
           mimetype: req.file.mimetype,
           size: req.file.size,
-          path: req.file.path,
         }
       : null,
   });
@@ -39,7 +110,10 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
   }
   if (!title || !visibleDate || !deadline || !quarter) {
     return next(
-      new ErrorResponse("Title, visibleDate, deadline, and quarter are required", 400)
+      new ErrorResponse(
+        "Title, visibleDate, deadline, and quarter are required",
+        400
+      )
     );
   }
 
@@ -68,14 +142,25 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
     createdBy: req.user.id,
   };
 
+  // Handle file upload to Firebase Storage
   if (req.file) {
-    // Store the attachment path with the original filename
-    activityData.attachmentPath = `uploads/${req.file.filename}`;
-    console.log("📎 File attached:", {
-      storedPath: activityData.attachmentPath,
-      originalName: req.file.originalname,
-      finalName: req.file.filename
-    });
+    try {
+      const firebaseUrl = await uploadFileToFirebase(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        {
+          activityTitle: title,
+          subjectId,
+          uploadedBy: req.user.id,
+        }
+      );
+      activityData.attachmentPath = firebaseUrl;
+      console.log("📎 Activity attachment uploaded to Firebase:", firebaseUrl);
+    } catch (uploadError) {
+      console.error("Error uploading activity attachment:", uploadError);
+      return next(new ErrorResponse("Failed to upload attachment", 500));
+    }
   }
 
   const activity = await Activity.create(activityData);
@@ -186,10 +271,6 @@ exports.getActivity = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse("Not authorized to view this activity", 403));
   }
 
-  if (activity.attachmentPath) {
-    activity.attachmentPath = activity.attachmentPath.replace(/\\/g, "/");
-  }
-
   res.status(200).json({
     success: true,
     data: activity,
@@ -241,20 +322,36 @@ exports.updateActivity = asyncHandler(async (req, res, next) => {
     points: points !== undefined && points !== "" ? Number(points) : null,
   };
 
+  // Handle new file upload
   if (req.file) {
-    if (activity.attachmentPath) {
-      const filePath = path.join(process.cwd(), activity.attachmentPath);
-      fs.unlink(filePath, (err) => {
-        if (err) console.error("Error deleting old attachment:", err);
-      });
+    try {
+      // Delete old attachment from Firebase if it exists
+      if (activity.attachmentPath) {
+        await deleteFileFromFirebase(activity.attachmentPath);
+      }
+
+      // Upload new file to Firebase
+      const firebaseUrl = await uploadFileToFirebase(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        {
+          activityId: activity._id.toString(),
+          activityTitle: title || activity.title,
+          updatedBy: req.user.id,
+        }
+      );
+      updateFields.attachmentPath = firebaseUrl;
+      console.log("📎 Updated activity attachment in Firebase:", firebaseUrl);
+    } catch (uploadError) {
+      console.error("Error updating activity attachment:", uploadError);
+      return next(new ErrorResponse("Failed to update attachment", 500));
     }
-    updateFields.attachmentPath = `uploads/${req.file.filename}`;
   } else if (removeAttachment === "true" && activity.attachmentPath) {
-    const filePath = path.join(process.cwd(), activity.attachmentPath);
-    fs.unlink(filePath, (err) => {
-      if (err) console.error("Error deleting attachment on remove:", err);
-    });
+    // Remove attachment
+    await deleteFileFromFirebase(activity.attachmentPath);
     updateFields.attachmentPath = null;
+    console.log("🗑️ Removed activity attachment from Firebase");
   }
 
   const updatedActivity = await Activity.findByIdAndUpdate(
@@ -293,28 +390,20 @@ exports.deleteActivity = asyncHandler(async (req, res, next) => {
     );
   }
 
+  // Delete activity attachment from Firebase
   if (activity.attachmentPath) {
-    const filePath = path.join(process.cwd(), activity.attachmentPath);
-    fs.unlink(filePath, (err) => {
-      /* ignore missing-file errors */
-    });
+    await deleteFileFromFirebase(activity.attachmentPath);
   }
 
+  // Delete submission attachments from Firebase
   if (activity.submissions && activity.submissions.length > 0) {
-    activity.submissions.forEach((submission) => {
+    for (const submission of activity.submissions) {
       if (submission.attachmentPaths && submission.attachmentPaths.length > 0) {
-        submission.attachmentPaths.forEach((attachPath) => {
-          const filePath = path.join(process.cwd(), attachPath);
-          fs.unlink(filePath, (err) => {
-            if (err)
-              console.error(
-                `Error deleting submission attachment ${attachPath}:`,
-                err
-              );
-          });
-        });
+        for (const attachPath of submission.attachmentPaths) {
+          await deleteFileFromFirebase(attachPath);
+        }
       }
-    });
+    }
   }
 
   await Subject.findByIdAndUpdate(activity.subject, {
@@ -358,30 +447,48 @@ exports.turnInActivity = asyncHandler(async (req, res, next) => {
     );
   }
 
-  // Use original filenames for submissions
-  const attachmentPaths = req.files
-    ? req.files.map((file) => `uploads/${file.filename}`)
-    : [];
+  // Upload submission files to Firebase Storage
+  const attachmentPaths = [];
+  if (req.files && req.files.length > 0) {
+    try {
+      for (const file of req.files) {
+        const firebaseUrl = await uploadFileToFirebase(
+          file.buffer,
+          file.originalname,
+          file.mimetype,
+          {
+            activityId: activity._id.toString(),
+            activityTitle: activity.title,
+            studentId,
+            submissionType: "student-submission",
+          }
+        );
+        attachmentPaths.push(firebaseUrl);
+      }
+      console.log(
+        `📎 Uploaded ${attachmentPaths.length} submission files to Firebase`
+      );
+    } catch (uploadError) {
+      console.error("Error uploading submission files:", uploadError);
+      return next(new ErrorResponse("Failed to upload submission files", 500));
+    }
+  }
 
   let submission = activity.submissions.find((sub) =>
     sub.student.equals(studentId)
   );
 
   if (submission) {
-    if (attachmentPaths.length > 0 && submission.attachmentPaths.length > 0) {
-      submission.attachmentPaths.forEach((attachPath) => {
-        const filePath = path.join(process.cwd(), attachPath);
-        fs.unlink(filePath, (err) => {
-          if (err)
-            console.error(
-              `Error deleting old submission attachment ${attachPath}:`,
-              err
-            );
-        });
-      });
+    // Delete old submission files from Firebase
+    if (submission.attachmentPaths && submission.attachmentPaths.length > 0) {
+      for (const oldPath of submission.attachmentPaths) {
+        await deleteFileFromFirebase(oldPath);
+      }
     }
+
     submission.submissionDate = new Date();
-    submission.attachmentPaths = attachmentPaths.length > 0 ? attachmentPaths : submission.attachmentPaths;
+    submission.attachmentPaths =
+      attachmentPaths.length > 0 ? attachmentPaths : submission.attachmentPaths;
     submission.status = "submitted";
   } else {
     activity.submissions.push({
@@ -440,20 +547,14 @@ exports.undoTurnInActivity = asyncHandler(async (req, res, next) => {
 
   const submissionToRemove = activity.submissions[submissionIndex];
 
+  // Delete submission files from Firebase
   if (
     submissionToRemove.attachmentPaths &&
     submissionToRemove.attachmentPaths.length > 0
   ) {
-    submissionToRemove.attachmentPaths.forEach((attachPath) => {
-      const filePath = path.join(process.cwd(), attachPath);
-      fs.unlink(filePath, (err) => {
-        if (err)
-          console.error(
-            `Error deleting submission attachment ${attachPath}:`,
-            err
-          );
-      });
-    });
+    for (const attachPath of submissionToRemove.attachmentPaths) {
+      await deleteFileFromFirebase(attachPath);
+    }
   }
 
   activity.submissions.splice(submissionIndex, 1);
@@ -512,11 +613,11 @@ exports.getStudentGradeForActivity = asyncHandler(async (req, res, next) => {
 
   const grade = await Grade.findOne({
     activity: activityId,
-    student: studentId
-  }).populate('gradedBy', 'firstName middleName lastName');
+    student: studentId,
+  }).populate("gradedBy", "firstName middleName lastName");
 
   res.status(200).json({
     success: true,
-    data: grade
+    data: grade,
   });
 });
