@@ -214,6 +214,7 @@ exports.login = asyncHandler(async (req, res, next) => {
 // @access  Private/Admin (or Public if self-registration is enabled with specific logic)
 exports.register = asyncHandler(async (req, res, next) => {
   const {
+    userId, // Now required from admin
     username,
     firstName,
     middleName,
@@ -224,29 +225,25 @@ exports.register = asyncHandler(async (req, res, next) => {
     address,
     sex,
     role,
-    profilePicture, // Optional
-    status, // Allow status to be passed but will be overridden for admin-created users
+    profilePicture,
+    status,
   } = req.body;
 
-  // When admin creates a user, status is automatically set to 'active'
-  // This ensures admin-created accounts are immediately usable
   const userStatus = "active";
 
-  // Basic check for core required fields (Mongoose schema will do more detailed validation)
+  // Updated required field check - removed email, phoneNumber, address
   if (
+    !userId ||
     !username ||
     !firstName ||
     !lastName ||
-    !email ||
     !password ||
-    !phoneNumber ||
-    !address ||
     !role ||
     !sex
   ) {
     return next(
       new ErrorResponse(
-        "Missing required fields: username, firstName, lastName, email, password, phoneNumber, address, role, sex",
+        "Missing required fields: userId, username, firstName, lastName, password, role, sex",
         400
       )
     );
@@ -266,17 +263,19 @@ exports.register = asyncHandler(async (req, res, next) => {
 
   let newUser;
   const userData = {
+    userId, // Use admin-provided userId
     username,
     firstName,
     middleName,
     lastName,
-    email,
+    email: email && email.trim() !== "" ? email.trim() : undefined, // Only set if provided and not empty
     password,
-    phoneNumber,
-    address,
+    phoneNumber:
+      phoneNumber && phoneNumber.trim() !== "" ? phoneNumber : undefined, // Only set if provided and not empty
+    address: address && address.trim() !== "" ? address.trim() : undefined, // Only set if provided and not empty
     role,
     sex,
-    status: userStatus, // Always set to 'active' for admin-created users
+    status: userStatus,
     profilePicture,
   };
 

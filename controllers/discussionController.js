@@ -117,17 +117,47 @@ exports.getDiscussionsForSubject = asyncHandler(async (req, res, next) => {
     );
   }
 
-  // 4) Fetch + populate author and comments.author with profilePicture
+  // 4) Fetch + populate with nested replyTo fields
   const discussions = await Discussion.find({ subject: subjectId })
     .populate({
       path: "author",
       select:
-        "firstName middleName lastName email username role profilePicture", // Added profilePicture
+        "firstName middleName lastName email username role profilePicture",
     })
     .populate({
       path: "comments.author",
       select:
-        "firstName middleName lastName email username role profilePicture", // Added profilePicture
+        "firstName middleName lastName email username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.author",
+      select:
+        "firstName middleName lastName email username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replyTo",
+      select:
+        "firstName middleName lastName email username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.author",
+      select:
+        "firstName middleName lastName email username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replyTo",
+      select:
+        "firstName middleName lastName email username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replies.author",
+      select:
+        "firstName middleName lastName email username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replies.replyTo",
+      select:
+        "firstName middleName lastName email username role profilePicture",
     })
     .sort("-createdAt");
 
@@ -150,25 +180,55 @@ exports.getDiscussion = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse(`Invalid discussion ID format: ${id}`, 400));
   }
 
-  // 2) Fetch + populate subject→(teacher, students), author, comments.author
+  // 2) Fetch + populate with nested replyTo fields
   const discussion = await Discussion.findById(id)
     .populate({
       path: "subject",
       select: "subjectCode subjectName description teacher students",
       populate: {
         path: "teacher students",
-        select: "firstName lastName username role profilePicture", // Added profilePicture
+        select: "firstName lastName username role profilePicture",
       },
     })
     .populate({
       path: "author",
       select:
-        "firstName middleName lastName email username role profilePicture", // Added profilePicture
+        "firstName middleName lastName email username role profilePicture",
     })
     .populate({
       path: "comments.author",
       select:
-        "firstName middleName lastName email username role profilePicture", // Added profilePicture
+        "firstName middleName lastName email username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.author",
+      select:
+        "firstName middleName lastName email username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replyTo",
+      select:
+        "firstName middleName lastName email username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.author",
+      select:
+        "firstName middleName lastName email username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replyTo",
+      select:
+        "firstName middleName lastName email username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replies.author",
+      select:
+        "firstName middleName lastName email username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replies.replyTo",
+      select:
+        "firstName middleName lastName email username role profilePicture",
     });
 
   if (!discussion) {
@@ -232,11 +292,19 @@ exports.updateDiscussion = asyncHandler(async (req, res, next) => {
   }
 
   // 4) Apply updates
-  if (title !== undefined) {
+  let contentChanged = false;
+  if (title !== undefined && title !== discussion.title) {
     discussion.title = title;
+    contentChanged = true;
   }
-  if (content !== undefined) {
+  if (content !== undefined && content !== discussion.content) {
     discussion.content = content;
+    contentChanged = true;
+  }
+
+  // Mark as edited if content changed
+  if (contentChanged) {
+    discussion.isEdited = true;
   }
 
   // 5) Save changes
@@ -246,11 +314,15 @@ exports.updateDiscussion = asyncHandler(async (req, res, next) => {
   const updatedDiscussion = await Discussion.findById(id)
     .populate({
       path: "author",
-      select: "firstName middleName lastName username role profilePicture", // Added profilePicture
+      select: "firstName middleName lastName username role profilePicture",
     })
     .populate({
       path: "comments.author",
-      select: "firstName middleName lastName username role profilePicture", // Added profilePicture
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.author",
+      select: "firstName middleName lastName username role profilePicture",
     });
 
   // 7) Return the updated discussion
@@ -369,11 +441,11 @@ exports.addCommentToDiscussion = asyncHandler(async (req, res, next) => {
   const updatedDiscussion = await Discussion.findById(discussionId)
     .populate({
       path: "author",
-      select: "firstName middleName lastName username role profilePicture", // Added profilePicture
+      select: "firstName middleName lastName username role profilePicture",
     })
     .populate({
       path: "comments.author",
-      select: "firstName middleName lastName username role profilePicture", // Added profilePicture
+      select: "firstName middleName lastName username role profilePicture",
     });
 
   // 6) Return the updated discussion
@@ -458,7 +530,10 @@ exports.updateCommentInDiscussion = asyncHandler(async (req, res, next) => {
   }
 
   // 5) Apply update
-  comment.content = content.trim();
+  if (content.trim() !== comment.content) {
+    comment.content = content.trim();
+    comment.isEdited = true;
+  }
   await discussion.save();
 
   console.log("Comment updated successfully");
@@ -467,11 +542,15 @@ exports.updateCommentInDiscussion = asyncHandler(async (req, res, next) => {
   const updatedDiscussion = await Discussion.findById(discussionId)
     .populate({
       path: "author",
-      select: "firstName middleName lastName username role profilePicture", // Added profilePicture
+      select: "firstName middleName lastName username role profilePicture",
     })
     .populate({
       path: "comments.author",
-      select: "firstName middleName lastName username role profilePicture", // Added profilePicture
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.author",
+      select: "firstName middleName lastName username role profilePicture",
     });
 
   // 7) Return the updated discussion
@@ -488,24 +567,13 @@ exports.updateCommentInDiscussion = asyncHandler(async (req, res, next) => {
 exports.deleteCommentFromDiscussion = asyncHandler(async (req, res, next) => {
   const { discussionId, commentId } = req.params;
 
-  console.log("=== DELETE COMMENT REQUEST ===");
-  console.log("Discussion ID:", discussionId);
-  console.log("Comment ID:", commentId);
-  console.log("User ID:", req.user.id);
-  console.log("User Role:", req.user.role);
-
   // 1) Validate IDs
-  if (!mongoose.Types.ObjectId.isValid(discussionId)) {
-    console.log("Invalid discussion ID format");
+  if (
+    !mongoose.Types.ObjectId.isValid(discussionId) ||
+    !mongoose.Types.ObjectId.isValid(commentId)
+  ) {
     return next(
-      new ErrorResponse(`Invalid discussion ID format: ${discussionId}`, 400)
-    );
-  }
-
-  if (!mongoose.Types.ObjectId.isValid(commentId)) {
-    console.log("Invalid comment ID format");
-    return next(
-      new ErrorResponse(`Invalid comment ID format: ${commentId}`, 400)
+      new ErrorResponse("Invalid discussion or comment ID format", 400)
     );
   }
 
@@ -515,22 +583,14 @@ exports.deleteCommentFromDiscussion = asyncHandler(async (req, res, next) => {
     "teacher students"
   );
   if (!discussion) {
-    console.log("Discussion not found");
     return next(
       new ErrorResponse(`Discussion not found with ID ${discussionId}`, 404)
     );
   }
 
-  console.log("Discussion found:", {
-    id: discussion._id,
-    author: discussion.author,
-    subjectTeacher: discussion.subject?.teacher,
-  });
-
   // 3) Locate the comment
   const comment = discussion.comments.id(commentId);
   if (!comment) {
-    console.log("Comment not found in discussion");
     return next(
       new ErrorResponse(
         `Comment not found with ID ${commentId} in this discussion`,
@@ -538,12 +598,6 @@ exports.deleteCommentFromDiscussion = asyncHandler(async (req, res, next) => {
       )
     );
   }
-
-  console.log("Comment found:", {
-    id: comment._id,
-    author: comment.author,
-    content: comment.content,
-  });
 
   // 4) Authorization check
   const isCommentAuthor = comment.author.toString() === req.user.id;
@@ -553,66 +607,381 @@ exports.deleteCommentFromDiscussion = asyncHandler(async (req, res, next) => {
     discussion.subject.teacher.toString() === req.user.id;
   const isAdmin = req.user.role === "Admin";
 
-  console.log("Authorization check:", {
-    isCommentAuthor,
-    isDiscussionAuthor,
-    isTeacherOfSubject,
-    isAdmin,
-    commentAuthorId: comment.author.toString(),
-    currentUserId: req.user.id,
-  });
-
-  // Allow deletion if user is comment author, discussion author, subject teacher, or admin
   if (
     !isCommentAuthor &&
     !isDiscussionAuthor &&
     !isTeacherOfSubject &&
     !isAdmin
   ) {
-    console.log(
-      "Authorization failed - user not allowed to delete this comment"
-    );
     return next(
       new ErrorResponse("You are not authorized to delete this comment.", 403)
     );
   }
 
-  console.log("Authorization passed - proceeding with deletion");
-
   // 5) Remove the comment from the array
-  try {
-    // Method 1: Using pull (recommended)
-    discussion.comments.pull(commentId);
-    await discussion.save();
+  discussion.comments.pull(commentId);
+  await discussion.save();
 
-    console.log("Comment successfully removed from discussion");
-
-    // 6) Re-fetch the updated discussion with populated fields
-    const updatedDiscussion = await Discussion.findById(discussionId)
-      .populate({
-        path: "author",
-        select:
-          "firstName middleName lastName username role email profilePicture", // Added profilePicture
-      })
-      .populate({
-        path: "comments.author",
-        select:
-          "firstName middleName lastName username role email profilePicture", // Added profilePicture
-      });
-
-    console.log("Updated discussion fetched:", {
-      id: updatedDiscussion._id,
-      commentCount: updatedDiscussion.comments.length,
+  // 6) Re-fetch the updated discussion
+  const updatedDiscussion = await Discussion.findById(discussionId)
+    .populate({
+      path: "author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.author",
+      select: "firstName middleName lastName username role profilePicture",
     });
 
-    // 7) Return success response
-    res.status(200).json({
-      success: true,
-      data: updatedDiscussion,
-      message: "Comment successfully deleted",
-    });
-  } catch (error) {
-    console.error("Error during comment deletion:", error);
-    return next(new ErrorResponse("Failed to delete comment", 500));
-  }
+  // 7) Return success response
+  res.status(200).json({
+    success: true,
+    data: updatedDiscussion,
+    message: "Comment successfully deleted",
+  });
 });
+
+// @desc    Add a reply to a comment
+// @route   POST /api/v1/discussions/:discussionId/comments/:commentId/replies
+// @access  Private (Enrolled Students, Assigned Teacher, Admin)
+exports.addReplyToComment = asyncHandler(async (req, res, next) => {
+  const { discussionId, commentId } = req.params;
+  const { content, replyToUserId } = req.body;
+
+  // 1) Validate IDs & payload
+  if (
+    !mongoose.Types.ObjectId.isValid(discussionId) ||
+    !mongoose.Types.ObjectId.isValid(commentId)
+  ) {
+    return next(
+      new ErrorResponse("Invalid discussion or comment ID format", 400)
+    );
+  }
+  if (!content) {
+    return next(new ErrorResponse("Reply content is required", 400));
+  }
+
+  // 2) Fetch discussion + its subject
+  const discussion = await Discussion.findById(discussionId).populate(
+    "subject",
+    "teacher students"
+  );
+  if (!discussion) {
+    return next(
+      new ErrorResponse(`Discussion not found with ID ${discussionId}`, 404)
+    );
+  }
+
+  // 3) Locate the comment
+  const comment = discussion.comments.id(commentId);
+  if (!comment) {
+    return next(
+      new ErrorResponse(
+        `Comment not found with ID ${commentId} in this discussion`,
+        404
+      )
+    );
+  }
+
+  // 4) Authorization: only enrolled students, subject teacher, or admin
+  const subject = discussion.subject;
+  const isEnrolledStudent =
+    req.user.role === "Student" &&
+    subject.students.some((s) => s.equals(req.user.id));
+  const isTeacherOfSubject =
+    req.user.role === "Teacher" &&
+    subject.teacher &&
+    subject.teacher.equals(req.user.id);
+  const isAdmin = req.user.role === "Admin";
+  if (!isEnrolledStudent && !isTeacherOfSubject && !isAdmin) {
+    return next(
+      new ErrorResponse("You are not authorized to reply to this comment.", 403)
+    );
+  }
+
+  // 5) Push new reply
+  const newReply = {
+    author: req.user.id,
+    content: content,
+    replies: [],
+  };
+
+  if (replyToUserId && mongoose.Types.ObjectId.isValid(replyToUserId)) {
+    newReply.replyTo = replyToUserId;
+  }
+
+  comment.replies.push(newReply);
+  await discussion.save();
+
+  // 6) Re‐fetch populated discussion with nested population
+  const updatedDiscussion = await Discussion.findById(discussionId)
+    .populate({
+      path: "author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replyTo",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replyTo",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replies.author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replies.replyTo",
+      select: "firstName middleName lastName username role profilePicture",
+    });
+
+  // 7) Return the updated discussion
+  res.status(201).json({
+    success: true,
+    data: updatedDiscussion,
+  });
+});
+
+// @desc    Update a reply to a comment
+// @route   PUT /api/v1/discussions/:discussionId/comments/:commentId/replies/:replyId
+// @access  Private (Reply Author, Assigned Teacher, Admin)
+exports.updateReplyInComment = asyncHandler(async (req, res, next) => {
+  const { discussionId, commentId, replyId } = req.params;
+  const { content } = req.body;
+
+  // 1) Validate IDs & payload
+  if (
+    !mongoose.Types.ObjectId.isValid(discussionId) ||
+    !mongoose.Types.ObjectId.isValid(commentId) ||
+    !mongoose.Types.ObjectId.isValid(replyId)
+  ) {
+    return next(
+      new ErrorResponse("Invalid discussion, comment, or reply ID format", 400)
+    );
+  }
+  if (!content || content.trim() === "") {
+    return next(new ErrorResponse("Reply content cannot be empty", 400));
+  }
+
+  // 2) Fetch discussion + its subject
+  const discussion = await Discussion.findById(discussionId).populate(
+    "subject",
+    "teacher"
+  );
+  if (!discussion) {
+    return next(
+      new ErrorResponse(`Discussion not found with ID ${discussionId}`, 404)
+    );
+  }
+
+  // 3) Locate the comment
+  const comment = discussion.comments.id(commentId);
+  if (!comment) {
+    return next(
+      new ErrorResponse(
+        `Comment not found with ID ${commentId} in this discussion`,
+        404
+      )
+    );
+  }
+
+  // 4) Locate the reply
+  const reply = comment.replies.id(replyId);
+  if (!reply) {
+    return next(
+      new ErrorResponse(
+        `Reply not found with ID ${replyId} in this comment`,
+        404
+      )
+    );
+  }
+
+  // 5) Authorization: only reply author, subject teacher, or admin
+  const isReplyAuthor = reply.author.toString() === req.user.id;
+  const isTeacherOfSubject =
+    discussion.subject.teacher &&
+    discussion.subject.teacher.toString() === req.user.id;
+  const isAdmin = req.user.role === "Admin";
+
+  if (!isReplyAuthor && !isTeacherOfSubject && !isAdmin) {
+    return next(
+      new ErrorResponse("You are not authorized to update this reply.", 403)
+    );
+  }
+
+  // 6) Apply update
+  if (content.trim() !== reply.content) {
+    reply.content = content.trim();
+    reply.isEdited = true;
+  }
+  await discussion.save();
+
+  // 7) Re‐fetch populated discussion with replyTo
+  const updatedDiscussion = await Discussion.findById(discussionId)
+    .populate({
+      path: "author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replyTo",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replyTo",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replies.author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replies.replyTo",
+      select: "firstName middleName lastName username role profilePicture",
+    });
+
+  // 8) Return the updated discussion
+  res.status(200).json({
+    success: true,
+    data: updatedDiscussion,
+    message: "Reply updated successfully",
+  });
+});
+
+// @desc    Delete a reply from a comment
+// @route   DELETE /api/v1/discussions/:discussionId/comments/:commentId/replies/:replyId
+// @access  Private (Reply Author, Comment Author, Discussion Author, Assigned Teacher, Admin)
+exports.deleteReplyFromComment = asyncHandler(async (req, res, next) => {
+  const { discussionId, commentId, replyId } = req.params;
+
+  // 1) Validate IDs
+  if (
+    !mongoose.Types.ObjectId.isValid(discussionId) ||
+    !mongoose.Types.ObjectId.isValid(commentId) ||
+    !mongoose.Types.ObjectId.isValid(replyId)
+  ) {
+    return next(
+      new ErrorResponse("Invalid discussion, comment, or reply ID format", 400)
+    );
+  }
+
+  // 2) Fetch discussion + its subject
+  const discussion = await Discussion.findById(discussionId).populate(
+    "subject",
+    "teacher students"
+  );
+  if (!discussion) {
+    return next(
+      new ErrorResponse(`Discussion not found with ID ${discussionId}`, 404)
+    );
+  }
+
+  // 3) Locate the comment
+  const comment = discussion.comments.id(commentId);
+  if (!comment) {
+    return next(
+      new ErrorResponse(
+        `Comment not found with ID ${commentId} in this discussion`,
+        404
+      )
+    );
+  }
+
+  // 4) Locate the reply
+  const reply = comment.replies.id(replyId);
+  if (!reply) {
+    return next(
+      new ErrorResponse(
+        `Reply not found with ID ${replyId} in this comment`,
+        404
+      )
+    );
+  }
+
+  // 5) Authorization check - Updated to match frontend permissions
+  const isReplyAuthor = reply.author.toString() === req.user.id;
+  const isCommentAuthor = comment.author.toString() === req.user.id;
+  const isDiscussionAuthor = discussion.author.toString() === req.user.id;
+  const isAdmin = req.user.role === "Admin";
+
+  // Note: Removed isTeacherOfSubject check - teachers can't delete replies that aren't theirs
+  if (!isReplyAuthor && !isCommentAuthor && !isDiscussionAuthor && !isAdmin) {
+    return next(
+      new ErrorResponse("You are not authorized to delete this reply.", 403)
+    );
+  }
+
+  // 6) Remove the reply from the array
+  comment.replies.pull(replyId);
+  await discussion.save();
+
+  // 7) Re-fetch the updated discussion with replyTo
+  const updatedDiscussion = await Discussion.findById(discussionId)
+    .populate({
+      path: "author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replyTo",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replyTo",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replies.author",
+      select: "firstName middleName lastName username role profilePicture",
+    })
+    .populate({
+      path: "comments.replies.replies.replies.replyTo",
+      select: "firstName middleName lastName username role profilePicture",
+    });
+
+  // 8) Return success response
+  res.status(200).json({
+    success: true,
+    data: updatedDiscussion,
+    message: "Reply successfully deleted",
+  });
+});
+
+// ✅ IMPORTANT: Remove any module.exports statement that was in the middle of the file
+// ✅ The exports should ONLY use the exports.functionName = ... pattern shown above
+// ✅ Do NOT add module.exports = { ... } at the end

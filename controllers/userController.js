@@ -150,6 +150,7 @@ const uploadProfilePicture = asyncHandler(async (req, res, next) => {
 // @access  Private/Admin
 const createUser = asyncHandler(async (req, res, next) => {
   const {
+    userId, // Now required from admin input
     username,
     firstName,
     middleName,
@@ -163,21 +164,19 @@ const createUser = asyncHandler(async (req, res, next) => {
     profilePicture,
   } = req.body;
 
-  // Add 'sex' to required field check
+  // Updated required field check - removed email, phoneNumber, address
   if (
+    !userId ||
     !username ||
     !firstName ||
     !lastName ||
-    !email ||
     !password ||
-    !phoneNumber ||
-    !address ||
     !role ||
     !sex
   ) {
     return next(
       new ErrorResponse(
-        "Missing required fields for user creation by admin, including sex",
+        "Missing required fields: userId, username, firstName, lastName, password, role, sex",
         400
       )
     );
@@ -198,17 +197,19 @@ const createUser = asyncHandler(async (req, res, next) => {
 
   let newUser;
   const userData = {
+    userId, // Use admin-provided userId
     username,
     firstName,
     middleName,
     lastName,
-    email,
+    email: email && email.trim() !== "" ? email.trim() : undefined, // Only set if provided and not empty
     password,
-    phoneNumber,
-    address,
+    phoneNumber:
+      phoneNumber && phoneNumber.trim() !== "" ? phoneNumber : undefined, // Only set if provided and not empty
+    address: address && address.trim() !== "" ? address.trim() : undefined, // Only set if provided and not empty
     role,
     sex,
-    status: "active", // Always set to 'active' for admin-created users
+    status: "active",
     profilePicture,
   };
 
@@ -642,6 +643,7 @@ const createMultipleUsers = asyncHandler(async (req, res, next) => {
   for (let i = 0; i < usersData.length; i++) {
     const userData = usersData[i];
     const {
+      userId, // Now required
       username,
       firstName,
       middleName,
@@ -655,15 +657,13 @@ const createMultipleUsers = asyncHandler(async (req, res, next) => {
       profilePicture,
     } = userData;
 
-    // --- Start Basic Validation for each user object ---
+    // Updated validation - removed email, phoneNumber, address from required
     const currentItemErrors = [];
+    if (!userId) currentItemErrors.push("userId is required.");
     if (!username) currentItemErrors.push("username is required.");
     if (!firstName) currentItemErrors.push("firstName is required.");
     if (!lastName) currentItemErrors.push("lastName is required.");
-    if (!email) currentItemErrors.push("email is required.");
     if (!password) currentItemErrors.push("password is required.");
-    if (!phoneNumber) currentItemErrors.push("phoneNumber is required.");
-    if (!address) currentItemErrors.push("address is required.");
     if (!role) currentItemErrors.push("role is required.");
     if (!sex) currentItemErrors.push("sex is required.");
 
@@ -689,8 +689,7 @@ const createMultipleUsers = asyncHandler(async (req, res, next) => {
       continue;
     }
 
-    // Check for existing username or email to prevent duplicates
-    // This adds DB queries per user; for very large batches, consider other strategies.
+    // Only check for existing username - remove email duplicate checking
     try {
       const existingUserByUsername = await User.findOne({ username });
       if (existingUserByUsername) {
@@ -702,15 +701,19 @@ const createMultipleUsers = asyncHandler(async (req, res, next) => {
         });
         continue;
       }
-      const existingUserByEmail = await User.findOne({ email });
-      if (existingUserByEmail) {
-        errors.push({
-          index: i,
-          userIdentifier: email,
-          messages: [`Email '${email}' already exists.`],
-          data: userData,
-        });
-        continue;
+
+      // Only check for existing email if email is provided
+      if (email && email.trim() !== "") {
+        const existingUserByEmail = await User.findOne({ email: email.trim() });
+        if (existingUserByEmail) {
+          errors.push({
+            index: i,
+            userIdentifier: email,
+            messages: [`Email '${email}' already exists.`],
+            data: userData,
+          });
+          continue;
+        }
       }
     } catch (dbCheckError) {
       errors.push({
@@ -725,14 +728,16 @@ const createMultipleUsers = asyncHandler(async (req, res, next) => {
     try {
       let newUser;
       const fullUserData = {
+        userId,
         username,
         firstName,
         middleName,
         lastName,
-        email,
+        email: email && email.trim() !== "" ? email.trim() : undefined, // Only set if provided and not empty
         password,
-        phoneNumber,
-        address,
+        phoneNumber:
+          phoneNumber && phoneNumber.trim() !== "" ? phoneNumber : undefined, // Only set if provided and not empty
+        address: address && address.trim() !== "" ? address.trim() : undefined, // Only set if provided and not empty
         role,
         sex,
         status: "active", // Always set to 'active' for admin-created users
@@ -911,13 +916,11 @@ const createUsersFromExcel = asyncHandler(async (req, res, next) => {
 
       // Validate required headers
       const requiredHeaders = [
+        "userId", // Now required
         "username",
         "firstName",
         "lastName",
-        "email",
         "password",
-        "phoneNumber",
-        "address",
         "role",
         "sex",
       ];
@@ -953,6 +956,7 @@ const createUsersFromExcel = asyncHandler(async (req, res, next) => {
         console.log(`Processing row ${rowNumber}:`, rowData);
 
         const {
+          userId, // Now required
           username,
           firstName,
           middleName,
@@ -967,22 +971,18 @@ const createUsersFromExcel = asyncHandler(async (req, res, next) => {
           profilePicture,
         } = rowData;
 
-        // Validate required fields
+        // Updated validation - removed email, phoneNumber, address from required
         const currentItemErrors = [];
+        if (!userId || userId.trim() === "")
+          currentItemErrors.push("userId is required.");
         if (!username || username.trim() === "")
           currentItemErrors.push("username is required.");
         if (!firstName || firstName.trim() === "")
           currentItemErrors.push("firstName is required.");
         if (!lastName || lastName.trim() === "")
           currentItemErrors.push("lastName is required.");
-        if (!email || email.trim() === "")
-          currentItemErrors.push("email is required.");
         if (!password || password.trim() === "")
           currentItemErrors.push("password is required.");
-        if (!phoneNumber || phoneNumber.trim() === "")
-          currentItemErrors.push("phoneNumber is required.");
-        if (!address || address.trim() === "")
-          currentItemErrors.push("address is required.");
         if (!role || role.trim() === "")
           currentItemErrors.push("role is required.");
         if (!sex || sex.trim() === "")
@@ -1019,21 +1019,29 @@ const createUsersFromExcel = asyncHandler(async (req, res, next) => {
 
         // Clean and prepare data
         const cleanData = {
+          userId: userId.trim(), // Use admin-provided userId
           username: username.trim(),
           firstName: firstName.trim(),
           middleName: middleName ? middleName.trim() : undefined,
           lastName: lastName.trim(),
-          email: email.trim().toLowerCase(),
+          email:
+            email && email.trim() !== ""
+              ? email.trim().toLowerCase()
+              : undefined, // Only set if provided and not empty
           password: password.trim(),
-          phoneNumber: phoneNumber.trim(),
-          address: address.trim(),
+          phoneNumber:
+            phoneNumber && phoneNumber.trim() !== ""
+              ? phoneNumber.trim()
+              : undefined, // Only set if provided and not empty
+          address:
+            address && address.trim() !== "" ? address.trim() : undefined, // Only set if provided and not empty
           role: role.trim(),
           sex: sex.trim(),
-          status: "active", // Always set to 'active' for admin-created users
+          status: "active",
           profilePicture: profilePicture ? profilePicture.trim() : undefined,
         };
 
-        // Check for existing users
+        // Check for existing users - only check email if provided
         try {
           const existingUserByUsername = await User.findOne({
             username: cleanData.username,
@@ -1048,17 +1056,20 @@ const createUsersFromExcel = asyncHandler(async (req, res, next) => {
             continue;
           }
 
-          const existingUserByEmail = await User.findOne({
-            email: cleanData.email,
-          });
-          if (existingUserByEmail) {
-            errors.push({
-              row: rowNumber,
-              userIdentifier: cleanData.email,
-              messages: [`Email '${cleanData.email}' already exists.`],
-              data: rowData,
+          // Only check for existing email if email is provided
+          if (cleanData.email) {
+            const existingUserByEmail = await User.findOne({
+              email: cleanData.email,
             });
-            continue;
+            if (existingUserByEmail) {
+              errors.push({
+                row: rowNumber,
+                userIdentifier: cleanData.email,
+                messages: [`Email '${cleanData.email}' already exists.`],
+                data: rowData,
+              });
+              continue;
+            }
           }
         } catch (dbCheckError) {
           errors.push({

@@ -57,6 +57,121 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
       needsImprovement: 0,
     };
 
+    // Get unique students across all subjects
+    const uniqueStudentIds = new Set();
+    subjects.forEach((subject) => {
+      subject.students.forEach((student) => {
+        uniqueStudentIds.add(student._id.toString());
+      });
+    });
+
+    // Calculate grade distribution per student (same as admin logic)
+    for (const studentId of uniqueStudentIds) {
+      // Get all subjects for this student
+      const studentSubjects = subjects.filter((subject) =>
+        subject.students.some((s) => s._id.toString() === studentId)
+      );
+
+      if (studentSubjects.length === 0) continue;
+
+      let totalSubjectPercentages = 0;
+      let validSubjectsCount = 0;
+
+      // Calculate percentage for each subject
+      for (const subject of studentSubjects) {
+        // Get all activities for this subject
+        const subjectActivities = activities.filter(
+          (activity) =>
+            activity.subject._id.toString() === subject._id.toString()
+        );
+
+        // Get all quizzes for this subject
+        const subjectQuizzes = quizzes.filter(
+          (quiz) =>
+            quiz.subject &&
+            quiz.subject._id.toString() === subject._id.toString()
+        );
+
+        // Get all grades for this student in this subject
+        const subjectGrades = grades.filter(
+          (grade) =>
+            grade.student._id.toString() === studentId &&
+            grade.subject._id.toString() === subject._id.toString()
+        );
+
+        let subjectTotalPossiblePoints = 0;
+        let subjectTotalEarnedPoints = 0;
+        let hasGradedItems = false;
+
+        // Add activity scores
+        subjectActivities.forEach((activity) => {
+          if (activity.points && activity.points > 0) {
+            const grade = subjectGrades.find(
+              (g) =>
+                g.activity &&
+                g.activity._id.toString() === activity._id.toString()
+            );
+
+            if (grade) {
+              subjectTotalPossiblePoints += activity.points;
+              subjectTotalEarnedPoints +=
+                grade.score + (grade.bonusPoints || 0);
+              hasGradedItems = true;
+            }
+          }
+        });
+
+        // Add quiz scores
+        subjectQuizzes.forEach((quiz) => {
+          if (quiz.quizPoints && quiz.quizPoints > 0) {
+            const submission = quiz.quizSubmissions?.find((sub) => {
+              const studentMatch =
+                typeof sub.student === "object"
+                  ? sub.student._id.toString() === studentId
+                  : sub.student.toString() === studentId;
+              const statusMatch =
+                sub.status === "graded" || sub.status === "submitted";
+              return studentMatch && statusMatch;
+            });
+
+            if (
+              submission &&
+              submission.quizScore !== undefined &&
+              submission.quizScore !== null
+            ) {
+              subjectTotalPossiblePoints += quiz.quizPoints;
+              subjectTotalEarnedPoints += submission.quizScore;
+              hasGradedItems = true;
+            }
+          }
+        });
+
+        // Calculate subject percentage if there are graded items
+        if (hasGradedItems && subjectTotalPossiblePoints > 0) {
+          const subjectPercentage =
+            (subjectTotalEarnedPoints / subjectTotalPossiblePoints) * 100;
+          totalSubjectPercentages += subjectPercentage;
+          validSubjectsCount++;
+        }
+      }
+
+      // Calculate overall average if student has grades in at least one subject
+      if (validSubjectsCount > 0) {
+        const overallAverage = totalSubjectPercentages / validSubjectsCount;
+
+        // Categorize into grade distribution
+        if (overallAverage >= 90) {
+          gradeDistribution.excellent++;
+        } else if (overallAverage >= 80) {
+          gradeDistribution.good++;
+        } else if (overallAverage >= 70) {
+          gradeDistribution.satisfactory++;
+        } else {
+          gradeDistribution.needsImprovement++;
+        }
+      }
+    }
+
     // Process each subject
     subjects.forEach((subject) => {
       const subjectActivities = activities.filter(
@@ -107,15 +222,8 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
       });
     });
 
-    // Process grades for distribution and recent activity
+    // Process grades for recent activity
     grades.forEach((grade) => {
-      if (grade.activity && grade.activity.points) {
-        const percentage = (grade.score / grade.activity.points) * 100;
-        if (percentage >= 90) gradeDistribution.excellent++;
-        else if (percentage >= 80) gradeDistribution.good++;
-        else if (percentage >= 70) gradeDistribution.satisfactory++;
-        else gradeDistribution.needsImprovement++;
-      }
       recentGrades++;
 
       // Add to recent activity
@@ -147,7 +255,7 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
 
     const analyticsData = {
       totalSubjects: subjects.length,
-      totalStudents,
+      totalStudents: uniqueStudentIds.size,
       totalActivities,
       totalQuizzes: quizzes.length,
       pendingSubmissions,
@@ -663,7 +771,7 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
     const honorStudents = [];
 
     for (const student of studentsArray) {
-      // Get all grades for this student in the selected grade level
+      // Get all subjects for this student in the selected grade level
       const studentSubjects = await Subject.find({
         gradeLevel: selectedGrade,
         schoolYear: defaultSchoolYear,
@@ -673,57 +781,206 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
 
       if (studentSubjects.length === 0) continue;
 
-      const subjectIds = studentSubjects.map((subject) => subject._id);
-      const studentGrades = await Grade.find({
-        student: student._id,
-        subject: { $in: subjectIds },
-      }).populate("activity", "points quarter");
+      let totalSubjectPercentages = 0;
+      let validSubjectsCount = 0;
 
-      // Calculate average percentage across all subjects
-      let totalPercentage = 0;
-      let totalSubjectsWithGrades = 0;
-
+      // Calculate percentage for each subject
       for (const subject of studentSubjects) {
-        const subjectGrades = studentGrades.filter(
-          (grade) => grade.subject.toString() === subject._id.toString()
-        );
+        // Get all activities for this subject
+        const subjectActivities = await Activity.find({
+          subject: subject._id,
+        });
 
-        if (subjectGrades.length > 0) {
-          let subjectTotalPoints = 0;
-          let subjectEarnedPoints = 0;
+        // Get all quizzes for this subject
+        const subjectQuizzes = await Quiz.find({
+          subject: subject._id,
+          status: { $in: ["published", "graded", "closed"] },
+        });
 
-          subjectGrades.forEach((grade) => {
-            if (grade.activity && grade.activity.points) {
-              subjectTotalPoints += grade.activity.points;
-              subjectEarnedPoints += grade.score + (grade.bonusPoints || 0);
+        // Get all grades for this student in this subject
+        const subjectGrades = await Grade.find({
+          student: student._id,
+          subject: subject._id,
+        }).populate("activity", "points quarter");
+
+        let subjectTotalPossiblePoints = 0;
+        let subjectTotalEarnedPoints = 0;
+        let hasGradedItems = false;
+
+        // Add activity scores
+        subjectActivities.forEach((activity) => {
+          if (activity.points && activity.points > 0) {
+            const grade = subjectGrades.find(
+              (g) =>
+                g.activity &&
+                g.activity._id.toString() === activity._id.toString()
+            );
+
+            if (grade) {
+              subjectTotalPossiblePoints += activity.points;
+              subjectTotalEarnedPoints +=
+                grade.score + (grade.bonusPoints || 0);
+              hasGradedItems = true;
             }
-          });
-
-          if (subjectTotalPoints > 0) {
-            const subjectPercentage =
-              (subjectEarnedPoints / subjectTotalPoints) * 100;
-            totalPercentage += subjectPercentage;
-            totalSubjectsWithGrades++;
           }
+        });
+
+        // Add quiz scores
+        subjectQuizzes.forEach((quiz) => {
+          if (quiz.quizPoints && quiz.quizPoints > 0) {
+            const submission = quiz.quizSubmissions?.find((sub) => {
+              const studentMatch =
+                typeof sub.student === "object"
+                  ? sub.student._id.toString() === student._id.toString()
+                  : sub.student.toString() === student._id.toString();
+              const statusMatch =
+                sub.status === "graded" || sub.status === "submitted";
+              return studentMatch && statusMatch;
+            });
+
+            if (
+              submission &&
+              submission.quizScore !== undefined &&
+              submission.quizScore !== null
+            ) {
+              subjectTotalPossiblePoints += quiz.quizPoints;
+              subjectTotalEarnedPoints += submission.quizScore;
+              hasGradedItems = true;
+            }
+          }
+        });
+
+        // Calculate subject percentage if there are graded items
+        if (hasGradedItems && subjectTotalPossiblePoints > 0) {
+          const subjectPercentage =
+            (subjectTotalEarnedPoints / subjectTotalPossiblePoints) * 100;
+          totalSubjectPercentages += subjectPercentage;
+          validSubjectsCount++;
+
+          console.log(
+            `Subject ${subject.subjectName} for ${student.firstName} ${student.lastName}:`,
+            {
+              totalPossible: subjectTotalPossiblePoints,
+              totalEarned: subjectTotalEarnedPoints,
+              percentage: subjectPercentage.toFixed(2) + "%",
+            }
+          );
         }
       }
 
-      const averagePercentage =
-        totalSubjectsWithGrades > 0
-          ? totalPercentage / totalSubjectsWithGrades
-          : 0;
+      // Calculate overall average if student has grades in at least one subject
+      if (validSubjectsCount > 0) {
+        const overallAverage = totalSubjectPercentages / validSubjectsCount;
 
-      if (averagePercentage >= 90) {
-        honorStudents.push({
-          ...student.toObject(),
-          averageGrade: Math.round(averagePercentage * 100) / 100,
-          totalSubjects: totalSubjectsWithGrades,
-        });
+        console.log(
+          `Student ${student.firstName} ${student.lastName} overall calculation:`,
+          {
+            totalSubjectPercentages: totalSubjectPercentages.toFixed(2),
+            validSubjectsCount,
+            overallAverage: overallAverage.toFixed(2) + "%",
+          }
+        );
+
+        if (overallAverage >= 90) {
+          honorStudents.push({
+            ...student.toObject(),
+            averageGrade: Math.round(overallAverage * 100) / 100,
+            subjectsWithGrades: validSubjectsCount,
+            totalSubjectsEnrolled: studentSubjects.length,
+            subjectBreakdown: await Promise.all(
+              studentSubjects.map(async (subject) => {
+                // Get detailed breakdown for each subject
+                const subjectActivities = await Activity.find({
+                  subject: subject._id,
+                });
+                const subjectQuizzes = await Quiz.find({
+                  subject: subject._id,
+                  status: { $in: ["published", "graded", "closed"] },
+                });
+                const subjectGrades = await Grade.find({
+                  student: student._id,
+                  subject: subject._id,
+                }).populate("activity", "points quarter");
+
+                let subjectTotalPossiblePoints = 0;
+                let subjectTotalEarnedPoints = 0;
+                let hasGradedItems = false;
+
+                // Calculate for this subject
+                subjectActivities.forEach((activity) => {
+                  if (activity.points && activity.points > 0) {
+                    const grade = subjectGrades.find(
+                      (g) =>
+                        g.activity &&
+                        g.activity._id.toString() === activity._id.toString()
+                    );
+                    if (grade) {
+                      subjectTotalPossiblePoints += activity.points;
+                      subjectTotalEarnedPoints +=
+                        grade.score + (grade.bonusPoints || 0);
+                      hasGradedItems = true;
+                    }
+                  }
+                });
+
+                subjectQuizzes.forEach((quiz) => {
+                  if (quiz.quizPoints && quiz.quizPoints > 0) {
+                    const submission = quiz.quizSubmissions?.find((sub) => {
+                      const studentMatch =
+                        typeof sub.student === "object"
+                          ? sub.student._id.toString() ===
+                            student._id.toString()
+                          : sub.student.toString() === student._id.toString();
+                      const statusMatch =
+                        sub.status === "graded" || sub.status === "submitted";
+                      return studentMatch && statusMatch;
+                    });
+                    if (
+                      submission &&
+                      submission.quizScore !== undefined &&
+                      submission.quizScore !== null
+                    ) {
+                      subjectTotalPossiblePoints += quiz.quizPoints;
+                      subjectTotalEarnedPoints += submission.quizScore;
+                      hasGradedItems = true;
+                    }
+                  }
+                });
+
+                const subjectPercentage =
+                  hasGradedItems && subjectTotalPossiblePoints > 0
+                    ? (subjectTotalEarnedPoints / subjectTotalPossiblePoints) *
+                      100
+                    : 0;
+
+                return {
+                  subjectName: subject.subjectName,
+                  percentage: hasGradedItems
+                    ? Math.round(subjectPercentage * 100) / 100
+                    : null,
+                  totalPossiblePoints: subjectTotalPossiblePoints,
+                  totalEarnedPoints: subjectTotalEarnedPoints,
+                  hasGrades: hasGradedItems,
+                };
+              })
+            ),
+          });
+        }
       }
     }
 
     // Sort honor students by average grade (highest first)
     honorStudents.sort((a, b) => b.averageGrade - a.averageGrade);
+
+    console.log(
+      `Honor students calculation complete. Found ${honorStudents.length} honor students:`,
+      honorStudents.map((s) => ({
+        name: `${s.firstName} ${s.lastName}`,
+        average: s.averageGrade + "%",
+        subjectsWithGrades: s.subjectsWithGrades,
+        totalSubjects: s.totalSubjectsEnrolled,
+      }))
+    );
 
     // 5. Get available school years for dropdown
     const availableSchoolYears = await Subject.distinct("schoolYear", {
