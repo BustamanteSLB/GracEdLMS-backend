@@ -29,7 +29,7 @@
     "mongoose": "^8.14.1",
     "multer": "^2.0.1",
     "node-cron": "^4.2.1",
-    "npm": "^11.5.2",
+    "npm": "^11.6.2",
     "officeparser": "^5.2.0",
     "openai": "^5.10.2",
     "pdf-parse": "^1.1.1",
