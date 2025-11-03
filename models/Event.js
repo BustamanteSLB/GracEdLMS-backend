@@ -1,69 +1,93 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
-const eventSchema = new mongoose.Schema({
-  createdBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: [true, 'Event creator is required.']
-  },
-  title: {
-    type: String,
-    required: [true, 'Event title is required.'],
-    trim: true,
-    maxlength: [200, 'Title cannot exceed 200 characters.']
-  },
-  header: {
-    type: String,
-    required: [true, 'Event header is required.'],
-    trim: true,
-    maxlength: [300, 'Header cannot exceed 300 characters.']
-  },
-  body: {
-    type: String,
-    required: [true, 'Event body is required.'],
-    trim: true,
-    maxlength: [5000, 'Body cannot exceed 5000 characters.']
-  },
-  images: [{
-    type: String,
-    trim: true
-  }],
-  startDate: {
-    type: Date,
-    required: [true, 'Start date is required.']
-  },
-  endDate: {
-    type: Date,
-    required: [true, 'End date is required.']
-    // Remove the complex validator - let controller handle date validation
-  },
-  priority: {
-    type: String,
-    enum: {
-      values: ['high', 'medium', 'low'],
-      message: 'Priority must be high, medium, or low.'
+const eventSchema = new mongoose.Schema(
+  {
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: [true, "Event creator is required."],
     },
-    default: 'medium'
-  },
-  targetAudience: {
-    type: String,
-    enum: {
-      values: ['all', 'students', 'teachers', 'admins'],
-      message: 'Target audience must be all, students, teachers, or admins.'
+    title: {
+      type: String,
+      required: [true, "Event title is required."],
+      trim: true,
+      maxlength: [200, "Title cannot exceed 200 characters."],
     },
-    default: 'all'
-  },
-  eventType: {
-    type: String,
-    enum: {
-      values: ['academic', 'administrative', 'holiday', 'meeting', 'deadline', 'other'],
-      message: 'Event type must be academic, administrative, holiday, meeting, deadline, or other.'
+    header: {
+      type: String,
+      required: [true, "Event header is required."],
+      trim: true,
+      maxlength: [300, "Header cannot exceed 300 characters."],
     },
-    default: 'other'
+    body: {
+      type: String,
+      required: [true, "Event body is required."],
+      trim: true,
+      maxlength: [5000, "Body cannot exceed 5000 characters."],
+    },
+    images: [
+      {
+        type: String,
+        trim: true,
+      },
+    ],
+    startDate: {
+      type: Date,
+      required: [true, "Start date is required."],
+      // Store as date only (midnight UTC)
+      set: function (date) {
+        const d = new Date(date);
+        d.setUTCHours(0, 0, 0, 0);
+        return d;
+      },
+    },
+    endDate: {
+      type: Date,
+      required: [true, "End date is required."],
+      // Store as date only (midnight UTC)
+      set: function (date) {
+        const d = new Date(date);
+        d.setUTCHours(0, 0, 0, 0);
+        return d;
+      },
+    },
+    priority: {
+      type: String,
+      enum: {
+        values: ["high", "medium", "low"],
+        message: "Priority must be high, medium, or low.",
+      },
+      default: "medium",
+    },
+    targetAudience: {
+      type: String,
+      enum: {
+        values: ["all", "students", "teachers", "admins"],
+        message: "Target audience must be all, students, teachers, or admins.",
+      },
+      default: "all",
+    },
+    eventType: {
+      type: String,
+      enum: {
+        values: [
+          "academic",
+          "administrative",
+          "holiday",
+          "meeting",
+          "deadline",
+          "other",
+        ],
+        message:
+          "Event type must be academic, administrative, holiday, meeting, deadline, or other.",
+      },
+      default: "other",
+    },
+  },
+  {
+    timestamps: true,
   }
-}, {
-  timestamps: true
-});
+);
 
 // Index for better query performance
 eventSchema.index({ startDate: 1, endDate: 1 });
@@ -73,19 +97,27 @@ eventSchema.index({ eventType: 1 });
 eventSchema.index({ createdBy: 1 });
 
 // Virtual for event status
-eventSchema.virtual('status').get(function() {
+eventSchema.virtual("status").get(function () {
   const now = new Date();
-  if (now < this.startDate) {
-    return 'upcoming';
-  } else if (now >= this.startDate && now <= this.endDate) {
-    return 'ongoing';
+  now.setUTCHours(0, 0, 0, 0);
+
+  const start = new Date(this.startDate);
+  start.setUTCHours(0, 0, 0, 0);
+
+  const end = new Date(this.endDate);
+  end.setUTCHours(0, 0, 0, 0);
+
+  if (now < start) {
+    return "upcoming";
+  } else if (now >= start && now <= end) {
+    return "ongoing";
   } else {
-    return 'past';
+    return "past";
   }
 });
 
 // Ensure virtual fields are serialized
-eventSchema.set('toJSON', { virtuals: true });
-eventSchema.set('toObject', { virtuals: true });
+eventSchema.set("toJSON", { virtuals: true });
+eventSchema.set("toObject", { virtuals: true });
 
-module.exports = mongoose.model('Event', eventSchema);
+module.exports = mongoose.model("Event", eventSchema);

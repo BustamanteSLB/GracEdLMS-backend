@@ -11,6 +11,9 @@ const OpenAI = require("openai");
 const mammoth = require("mammoth");
 const pdfParse = require("pdf-parse");
 const officeParser = require("officeparser");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 
 // Initialize OpenAI
 const openai = new OpenAI({
@@ -35,9 +38,40 @@ const extractTextFromBuffer = async (buffer, mimetype) => {
         "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
       mimetype === "application/vnd.ms-powerpoint"
     ) {
-      // Note: officeparser might need adjustment for buffer input
-      const data = await officeParser.parseOffice(buffer);
-      return data;
+      // officeparser requires a file path, so we need to write the buffer to a temp file
+      const tempFilePath = path.join(
+        os.tmpdir(),
+        `temp-${Date.now()}-${Math.random().toString(36).substring(7)}.pptx`
+      );
+
+      try {
+        // Write buffer to temporary file
+        await fs.promises.writeFile(tempFilePath, buffer);
+
+        // Parse the file using officeparser
+        const data = await new Promise((resolve, reject) => {
+          officeParser.parseOffice(tempFilePath, (data, err) => {
+            if (err) {
+              reject(err);
+            } else {
+              resolve(data);
+            }
+          });
+        });
+
+        // Clean up temp file
+        await fs.promises.unlink(tempFilePath);
+
+        return data;
+      } catch (error) {
+        // Ensure temp file is cleaned up even if there's an error
+        try {
+          await fs.promises.unlink(tempFilePath);
+        } catch (unlinkError) {
+          console.error("Error deleting temp file:", unlinkError);
+        }
+        throw error;
+      }
     } else if (mimetype === "text/plain") {
       return buffer.toString("utf8");
     }
@@ -103,40 +137,134 @@ Important rules:
 - Ensure questions are relevant to the content provided
 - Make questions challenging but fair
 - Vary the difficulty and question types
-- Return ONLY the JSON object, no other text
+- Return ONLY the JSON object, no other text or markdown formatting
+- Do not wrap the JSON in code blocks or backticks
 `;
 
   try {
+    console.log("Calling OpenAI API with GPT-5-mini...");
+
     const response = await openai.chat.completions.create({
-      model: "gpt-4.1-mini",
+      model: "gpt-5-mini", // Updated to latest GPT-5-mini model
       messages: [
         {
           role: "system",
           content:
-            "You are an expert quiz generator. Generate high-quality educational quiz questions based on provided content. Always respond with valid JSON only.",
+            "You are an expert quiz generator. Generate high-quality educational quiz questions based on provided content. You must respond with ONLY a valid JSON object, without any markdown formatting, code blocks, or additional text. Do not use backticks or any other formatting.",
         },
         {
           role: "user",
           content: prompt,
         },
       ],
-      temperature: 0.7,
-      max_tokens: 4000,
+      temperature: 1,
+      max_completion_tokens: 4000,
+      response_format: { type: "json_object" }, // Force JSON response
     });
 
-    const aiResponse = response.choices[0].message.content;
+    let aiResponse = response.choices[0].message.content;
+    console.log("Raw AI Response:", aiResponse.substring(0, 200) + "...");
+
+    // Clean up the response - remove markdown code blocks if present
+    aiResponse = aiResponse.trim();
+
+    // Remove markdown code blocks (```json and ```
+    if (aiResponse.startsWith("```")) {
+      aiResponse = aiResponse
+        .replace(/^```(?:json)?\s*\n?/i, "")
+        .replace(/\n?```\s*$/i, "");
+    }
+
+    // Try to extract JSON if there's additional text
+    const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      aiResponse = jsonMatch[0];
+    }
+
+    console.log("Cleaned AI Response:", aiResponse.substring(0, 200) + "...");
 
     // Parse the JSON response
-    const quizData = JSON.parse(aiResponse);
+    let quizData;
+    try {
+      quizData = JSON.parse(aiResponse);
+    } catch (parseError) {
+      console.error("JSON Parse Error:", parseError);
+      console.error("Failed to parse:", aiResponse);
+      throw new Error(
+        `Failed to parse AI response as JSON: ${parseError.message}`
+      );
+    }
 
     // Validate and clean the response
     if (!quizData.questions || !Array.isArray(quizData.questions)) {
-      throw new Error("Invalid AI response format");
+      throw new Error(
+        "Invalid AI response format: missing or invalid 'questions' array"
+      );
     }
 
-    return quizData.questions;
+    if (quizData.questions.length === 0) {
+      throw new Error("AI did not generate any questions");
+    }
+
+    console.log(
+      `Successfully parsed ${quizData.questions.length} questions from AI response`
+    );
+
+    // Validate each question
+    const validatedQuestions = quizData.questions.map((q, index) => {
+      if (!q.text || typeof q.text !== "string") {
+        throw new Error(`Question ${index + 1} is missing or has invalid text`);
+      }
+
+      if (
+        !q.type ||
+        !["multiple_choice", "true_false", "multiple_answers"].includes(q.type)
+      ) {
+        throw new Error(`Question ${index + 1} has invalid type: ${q.type}`);
+      }
+
+      if (!Array.isArray(q.options) || q.options.length < 2) {
+        throw new Error(
+          `Question ${index + 1} has invalid or insufficient options`
+        );
+      }
+
+      // Ensure all options have required fields
+      q.options = q.options.map((opt) => ({
+        text: opt.text || "",
+        isCorrect: !!opt.isCorrect,
+      }));
+
+      // Set default values for optional fields
+      return {
+        text: q.text,
+        type: q.type,
+        options: q.options,
+        itemPoints: q.itemPoints || 1,
+        isRequired: q.isRequired !== undefined ? q.isRequired : true,
+        answer: q.answer || "",
+      };
+    });
+
+    return validatedQuestions;
   } catch (error) {
     console.error("Error generating quiz with AI:", error);
+
+    // Provide more specific error messages
+    if (error.message.includes("API key")) {
+      throw new Error(
+        "OpenAI API key is invalid or missing. Please check your configuration."
+      );
+    } else if (error.message.includes("quota")) {
+      throw new Error(
+        "OpenAI API quota exceeded. Please check your usage limits."
+      );
+    } else if (error.message.includes("model")) {
+      throw new Error(
+        `OpenAI model error: ${error.message}. The model may not be available.`
+      );
+    }
+
     throw new Error(`AI quiz generation failed: ${error.message}`);
   }
 };
@@ -209,28 +337,20 @@ exports.generateAIQuiz = asyncHandler(async (req, res, next) => {
       0
     );
 
-    // Create quiz
-    const quiz = await Quiz.create({
-      subject,
-      createdBy: req.user.id,
-      title: title || `AI Generated Quiz - ${subjectExists.subjectName}`,
-      questions: aiQuestions,
-      timeLimit: timeLimit ? parseInt(timeLimit) : null,
-      quarter,
-      quizPoints,
-      status: "draft",
-    });
-
-    await quiz.populate("createdBy", "firstName lastName email");
-    await quiz.populate(
-      "subject",
-      "subjectName description gradeLevel section schoolYear"
-    );
-
-    res.status(201).json({
+    // CHANGED: Only return the questions, don't create the quiz yet
+    // The frontend modal will handle creating the quiz when user clicks Save
+    res.status(200).json({
       success: true,
       message: `Successfully generated ${aiQuestions.length} questions from uploaded file`,
-      data: quiz,
+      data: {
+        questions: aiQuestions,
+        title: title || `AI Generated Quiz - ${subjectExists.subjectName}`,
+        quizPoints,
+        // Include the form data for the modal to populate
+        subject,
+        quarter,
+        timeLimit: timeLimit ? parseInt(timeLimit) : null,
+      },
     });
   } catch (error) {
     console.error("Error in AI quiz generation:", error);

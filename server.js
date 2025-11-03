@@ -25,6 +25,7 @@ const eventRoutes        = require("./routes/eventRoutes");
 const quizRoutes         = require("./routes/quizRoutes");
 const teacherRoutes      = require("./routes/teacherRoutes");
 const studentRoutes      = require("./routes/studentRoutes");
+const schoolRoutes       = require("./routes/schoolRoutes");
 
 const app = express();
 
@@ -71,6 +72,7 @@ app.use("/api/v1/events", eventRoutes);
 app.use("/api/v1/quizzes", quizRoutes);
 app.use("/api/v1/teachers", teacherRoutes);
 app.use("/api/v1/students", studentRoutes);
+app.use("/api/v1/school", schoolRoutes);
 
 // ─── Mount error handler (must come after all routes) ─────────────────────────
 app.use(errorHandler);

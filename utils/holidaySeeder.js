@@ -126,6 +126,13 @@ function getHolidayBodyMessage(holidayName) {
   );
 }
 
+// Helper function to normalize date to midnight UTC (date only)
+const normalizeDate = (date) => {
+  const d = new Date(date);
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+};
+
 // Initialize holidays in database (runs once)
 async function initializeHolidays() {
   try {
@@ -174,16 +181,16 @@ async function generateHolidayEventsForYear(year) {
     const createdEvents = [];
 
     for (const holiday of holidays) {
-      const eventDate = new Date(year, holiday.month - 1, holiday.day);
-      const startOfDay = new Date(eventDate);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(eventDate);
-      endOfDay.setHours(23, 59, 59, 999);
+      // Create date at midnight UTC (date only, no time)
+      const eventDate = new Date(
+        Date.UTC(year, holiday.month - 1, holiday.day, 0, 0, 0, 0)
+      );
 
       // Check if event already exists for this year
       const existingEvent = await Event.findOne({
         title: holiday.name,
-        startDate: { $gte: startOfDay, $lte: endOfDay },
+        startDate: eventDate,
+        endDate: eventDate,
         eventType: "holiday",
       });
 
@@ -193,8 +200,8 @@ async function generateHolidayEventsForYear(year) {
           title: holiday.name,
           header: "Class Suspended",
           body: getHolidayBodyMessage(holiday.name),
-          startDate: startOfDay,
-          endDate: endOfDay,
+          startDate: eventDate,
+          endDate: eventDate, // Same day event
           priority: holiday.type === "regular" ? "high" : "medium",
           targetAudience: "all",
           eventType: "holiday",

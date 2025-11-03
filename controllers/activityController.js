@@ -84,8 +84,15 @@ const deleteFileFromFirebase = async (fileUrl) => {
 // Create a new activity for a subject
 exports.createActivity = asyncHandler(async (req, res, next) => {
   const { subjectId } = req.params;
-  const { title, description, visibleDate, deadline, quarter, points } =
-    req.body;
+  const {
+    title,
+    description,
+    visibleDate,
+    deadline,
+    quarter,
+    points,
+    allowLateSubmissions,
+  } = req.body;
 
   console.log("➡️ Create Activity Request:", {
     subjectId,
@@ -95,6 +102,7 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
     deadline,
     quarter,
     points,
+    allowLateSubmissions,
     hasFile: !!req.file,
     file: req.file
       ? {
@@ -138,6 +146,8 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
     deadline: new Date(deadline),
     quarter: quarter,
     points: points !== undefined && points !== "" ? Number(points) : null,
+    allowLateSubmissions:
+      allowLateSubmissions === "true" || allowLateSubmissions === true,
     subject: subjectId,
     createdBy: req.user.id,
   };
@@ -178,6 +188,7 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
     id: activity._id,
     title: activity.title,
     quarter: activity.quarter,
+    allowLateSubmissions: activity.allowLateSubmissions,
     attachmentPath: activity.attachmentPath,
   });
 
@@ -287,6 +298,7 @@ exports.updateActivity = asyncHandler(async (req, res, next) => {
     deadline,
     quarter,
     points,
+    allowLateSubmissions,
     removeAttachment,
   } = req.body;
 
@@ -320,6 +332,8 @@ exports.updateActivity = asyncHandler(async (req, res, next) => {
     deadline,
     quarter,
     points: points !== undefined && points !== "" ? Number(points) : null,
+    allowLateSubmissions:
+      allowLateSubmissions === "true" || allowLateSubmissions === true,
   };
 
   // Handle new file upload
@@ -441,9 +455,13 @@ exports.turnInActivity = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse("Student not enrolled in this subject", 403));
   }
 
-  if (new Date() > activity.deadline) {
+  // Check if deadline has passed and late submissions are not allowed
+  if (new Date() > activity.deadline && !activity.allowLateSubmissions) {
     return next(
-      new ErrorResponse("Cannot turn in activity past the deadline", 400)
+      new ErrorResponse(
+        "Late submissions are not allowed for this activity",
+        400
+      )
     );
   }
 
@@ -531,9 +549,13 @@ exports.undoTurnInActivity = asyncHandler(async (req, res, next) => {
     );
   }
 
-  if (new Date() > activity.deadline) {
+  // Check if deadline has passed and late submissions are not allowed
+  if (new Date() > activity.deadline && !activity.allowLateSubmissions) {
     return next(
-      new ErrorResponse("Cannot undo turn-in past the deadline", 400)
+      new ErrorResponse(
+        "Cannot undo turn-in when late submissions are not allowed",
+        400
+      )
     );
   }
 

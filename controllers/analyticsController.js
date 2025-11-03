@@ -498,7 +498,7 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
       subject: { $in: subjectIds },
     })
       .populate("subject", "subjectName")
-      .populate("createdBy", "firstName lastName email")
+      .populate("createdBy", "firstName lastName email profilePicture") // Added profilePicture
       .sort({ createdAt: -1 })
       .limit(2);
 
@@ -601,6 +601,7 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
         author: {
           firstName: announcement.createdBy.firstName,
           lastName: announcement.createdBy.lastName,
+          profilePicture: announcement.createdBy.profilePicture, // Added profilePicture
         },
       })),
       events: eventsDueToday.map((event) => ({
