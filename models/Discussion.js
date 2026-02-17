@@ -12,6 +12,8 @@ const replySchema = new mongoose.Schema(
     },
     content: { type: String, required: true, trim: true },
     isEdited: { type: Boolean, default: false },
+    isHidden: { type: Boolean, default: false }, // Ensure default
+    hiddenBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     replyTo: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -33,6 +35,8 @@ const commentSchema = new mongoose.Schema(
     },
     content: { type: String, required: true, trim: true },
     isEdited: { type: Boolean, default: false },
+    isHidden: { type: Boolean, default: false }, // Ensure default
+    hiddenBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     replies: [replySchema],
   },
   { timestamps: true }
@@ -53,7 +57,7 @@ const discussionSchema = new mongoose.Schema(
       required: true,
     },
     comments: [commentSchema],
-    isEdited: { type: Boolean, default: false }, // Add isEdited field
+    isEdited: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

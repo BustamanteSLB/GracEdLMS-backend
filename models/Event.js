@@ -34,22 +34,14 @@ const eventSchema = new mongoose.Schema(
     startDate: {
       type: Date,
       required: [true, "Start date is required."],
-      // Store as date only (midnight UTC)
-      set: function (date) {
-        const d = new Date(date);
-        d.setUTCHours(0, 0, 0, 0);
-        return d;
-      },
     },
     endDate: {
       type: Date,
       required: [true, "End date is required."],
-      // Store as date only (midnight UTC)
-      set: function (date) {
-        const d = new Date(date);
-        d.setUTCHours(0, 0, 0, 0);
-        return d;
-      },
+    },
+    isAllDay: {
+      type: Boolean,
+      default: true, // Default to all-day events
     },
     priority: {
       type: String,
@@ -95,17 +87,20 @@ eventSchema.index({ priority: 1 });
 eventSchema.index({ targetAudience: 1 });
 eventSchema.index({ eventType: 1 });
 eventSchema.index({ createdBy: 1 });
+eventSchema.index({ isAllDay: 1 });
 
 // Virtual for event status
 eventSchema.virtual("status").get(function () {
   const now = new Date();
-  now.setUTCHours(0, 0, 0, 0);
-
   const start = new Date(this.startDate);
-  start.setUTCHours(0, 0, 0, 0);
-
   const end = new Date(this.endDate);
-  end.setUTCHours(0, 0, 0, 0);
+
+  if (this.isAllDay) {
+    // For all-day events, compare dates only
+    now.setHours(0, 0, 0, 0);
+    start.setHours(0, 0, 0, 0);
+    end.setHours(0, 0, 0, 0);
+  }
 
   if (now < start) {
     return "upcoming";

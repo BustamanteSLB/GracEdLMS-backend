@@ -5,8 +5,34 @@ const Student = require("../models/Student");
 const User = require("../models/User");
 const Activity = require("../models/Activity");
 const Grade = require("../models/Grade");
+const Section = require("../models/Section"); // Add this import
 const asyncHandler = require("../utils/asyncHandler");
 const { ErrorResponse } = require("../utils/errorResponse");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+const { bucket } = require("../config/firebaseService"); // Add Firebase import
+
+// Configure multer for memory storage
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const filetypes = /jpeg|jpg|png|gif|webp/;
+    const mimetype = filetypes.test(file.mimetype);
+    const extname = filetypes.test(
+      path.extname(file.originalname).toLowerCase(),
+    );
+
+    if (mimetype && extname) {
+      return cb(null, true);
+    }
+    cb(new Error("Only image files are allowed!"));
+  },
+}).single("subjectImage");
 
 // Helper function to find a user by ID, username, or email
 async function findUserByIdentifier(identifier, role, requireActive = true) {
@@ -37,15 +63,21 @@ exports.createSubject = asyncHandler(async (req, res, next) => {
   const {
     subjectName,
     description,
-    teacherIdentifier,
     gradeLevel,
-    section,
+    section: sectionName,
     schoolYear,
+    teachers, // Array of teacher assignments with quarters
   } = req.body;
 
   if (!subjectName || !schoolYear) {
     return next(
-      new ErrorResponse("Subject name and school year are required", 400)
+      new ErrorResponse("Subject name and school year are required", 400),
+    );
+  }
+
+  if (!teachers || !Array.isArray(teachers) || teachers.length === 0) {
+    return next(
+      new ErrorResponse("At least one teacher assignment is required", 400),
     );
   }
 
@@ -53,62 +85,250 @@ exports.createSubject = asyncHandler(async (req, res, next) => {
     subjectName,
     description,
     gradeLevel,
-    section,
+    section: sectionName,
     schoolYear,
     students: [],
     courseMaterials: [],
-    isArchived: false, // Ensure new subjects are not archived
+    isArchived: false,
+    teachers: [],
   };
 
-  let teacherToAssign = null;
+  // Process teacher assignments
+  for (const teacherAssignment of teachers) {
+    const { teacherId, quarters, isAssignedToAllQuarters } = teacherAssignment;
 
-  if (req.user.role === "Teacher" && !teacherIdentifier) {
-    teacherToAssign = req.user.id;
-  } else if (teacherIdentifier) {
-    const teacher = await findUserByIdentifier(teacherIdentifier, "Teacher");
+    if (!teacherId) {
+      return next(new ErrorResponse("Teacher ID is required", 400));
+    }
+
+    const teacher = await findUserByIdentifier(teacherId, "Teacher");
     if (!teacher) {
       return next(
         new ErrorResponse(
-          `Active teacher not found with identifier: ${teacherIdentifier}`,
-          404
-        )
+          `Active teacher not found with identifier: ${teacherId}`,
+          404,
+        ),
       );
     }
-    teacherToAssign = teacher._id;
+
+    // Validate quarters
+    if (isAssignedToAllQuarters) {
+      subjectData.teachers.push({
+        teacher: teacher._id,
+        quarters: {
+          firstQuarter: true,
+          secondQuarter: true,
+          thirdQuarter: true,
+          fourthQuarter: true,
+        },
+        isAssignedToAllQuarters: true,
+      });
+    } else {
+      const hasAnyQuarter = Object.values(quarters || {}).some((q) => q);
+      if (!hasAnyQuarter) {
+        return next(
+          new ErrorResponse(
+            `Teacher ${teacher.firstName} ${teacher.lastName} must be assigned to at least one quarter`,
+            400,
+          ),
+        );
+      }
+
+      subjectData.teachers.push({
+        teacher: teacher._id,
+        quarters: quarters || {
+          firstQuarter: false,
+          secondQuarter: false,
+          thirdQuarter: false,
+          fourthQuarter: false,
+        },
+        isAssignedToAllQuarters: false,
+      });
+    }
   }
 
-  // Check if teacher already has 10 subjects (only for non-archived subjects)
-  if (teacherToAssign) {
-    const teacherSubjectCount = await Subject.countDocuments({
-      teacher: teacherToAssign,
+  // If section is provided, get students from that section
+  if (sectionName && gradeLevel && schoolYear) {
+    const sectionDoc = await Section.findOne({
+      sectionName,
+      gradeLevel,
+      schoolYear,
       isArchived: false,
     });
 
-    if (teacherSubjectCount >= 10) {
-      const teacher = await User.findById(teacherToAssign);
-      const teacherName = teacher
-        ? `${teacher.firstName} ${teacher.lastName}`
-        : "Teacher";
-      return next(
-        new ErrorResponse(
-          `${teacherName} has already reached the maximum limit of 10 subjects. Please delete an existing subject before adding a new one.`,
-          400
-        )
-      );
+    if (sectionDoc && sectionDoc.students.length > 0) {
+      // Check if total students exceed 30
+      if (sectionDoc.students.length > 30) {
+        return next(
+          new ErrorResponse(
+            `Section has ${sectionDoc.students.length} students, but subject capacity is limited to 30. Please reduce section size.`,
+            400,
+          ),
+        );
+      }
+      subjectData.students = sectionDoc.students;
     }
-
-    subjectData.teacher = teacherToAssign;
   }
 
   const subject = await Subject.create(subjectData);
 
-  if (subjectData.teacher) {
-    await User.findByIdAndUpdate(subjectData.teacher, {
+  // Add subject to each teacher's assignedSubjects
+  for (const teacherAssignment of subject.teachers) {
+    await User.findByIdAndUpdate(teacherAssignment.teacher, {
       $addToSet: { assignedSubjects: subject._id },
     });
   }
 
+  // Enroll students in the subject
+  if (subjectData.students.length > 0) {
+    await User.updateMany(
+      { _id: { $in: subjectData.students }, role: "Student" },
+      { $addToSet: { enrolledSubjects: subject._id } },
+    );
+  }
+
+  const populatedSubject = await Subject.findById(subject._id).populate({
+    path: "teachers.teacher",
+    select: "firstName lastName email",
+  });
+
   res.status(201).json({
+    success: true,
+    data: populatedSubject,
+  });
+});
+
+// @desc    Update subject
+// @route   PUT /api/v1/subjects/:id
+// @access  Private/Admin
+exports.updateSubject = asyncHandler(async (req, res, next) => {
+  let subject = await Subject.findById(req.params.id);
+
+  if (!subject) {
+    return next(
+      new ErrorResponse(`Subject not found with ID ${req.params.id}`, 404),
+    );
+  }
+
+  const {
+    subjectName,
+    description,
+    gradeLevel,
+    section,
+    schoolYear,
+    teachers, // Array of teacher assignments with quarters
+  } = req.body;
+
+  const fieldsToUpdate = {};
+  if (subjectName !== undefined) fieldsToUpdate.subjectName = subjectName;
+  if (description !== undefined) fieldsToUpdate.description = description;
+  if (gradeLevel !== undefined) fieldsToUpdate.gradeLevel = gradeLevel;
+  if (section !== undefined) fieldsToUpdate.section = section;
+  if (schoolYear !== undefined) fieldsToUpdate.schoolYear = schoolYear;
+  if (req.body.subjectImage !== undefined) {
+    fieldsToUpdate.subjectImage = req.body.subjectImage;
+  }
+
+  // Handle teacher assignments if provided
+  if (teachers && Array.isArray(teachers)) {
+    if (teachers.length === 0) {
+      return next(
+        new ErrorResponse("At least one teacher assignment is required", 400),
+      );
+    }
+
+    const oldTeacherIds = subject.teachers.map((t) => t.teacher.toString());
+    const newTeacherIds = [];
+    const updatedTeachers = [];
+
+    for (const teacherAssignment of teachers) {
+      const { teacherId, quarters, isAssignedToAllQuarters } =
+        teacherAssignment;
+
+      if (!teacherId) {
+        return next(new ErrorResponse("Teacher ID is required", 400));
+      }
+
+      const teacher = await findUserByIdentifier(teacherId, "Teacher");
+      if (!teacher) {
+        return next(
+          new ErrorResponse(
+            `Active teacher not found with identifier: ${teacherId}`,
+            404,
+          ),
+        );
+      }
+
+      newTeacherIds.push(teacher._id.toString());
+
+      // Validate quarters
+      if (isAssignedToAllQuarters) {
+        updatedTeachers.push({
+          teacher: teacher._id,
+          quarters: {
+            firstQuarter: true,
+            secondQuarter: true,
+            thirdQuarter: true,
+            fourthQuarter: true,
+          },
+          isAssignedToAllQuarters: true,
+        });
+      } else {
+        const hasAnyQuarter = Object.values(quarters || {}).some((q) => q);
+        if (!hasAnyQuarter) {
+          return next(
+            new ErrorResponse(
+              `Teacher ${teacher.firstName} ${teacher.lastName} must be assigned to at least one quarter`,
+              400,
+            ),
+          );
+        }
+
+        updatedTeachers.push({
+          teacher: teacher._id,
+          quarters: quarters || {
+            firstQuarter: false,
+            secondQuarter: false,
+            thirdQuarter: false,
+            fourthQuarter: false,
+          },
+          isAssignedToAllQuarters: false,
+        });
+      }
+    }
+
+    fieldsToUpdate.teachers = updatedTeachers;
+
+    // Remove subject from old teachers' assignedSubjects
+    const removedTeachers = oldTeacherIds.filter(
+      (id) => !newTeacherIds.includes(id),
+    );
+    for (const teacherId of removedTeachers) {
+      await User.findByIdAndUpdate(teacherId, {
+        $pull: { assignedSubjects: subject._id },
+      });
+    }
+
+    // Add subject to new teachers' assignedSubjects
+    const addedTeachers = newTeacherIds.filter(
+      (id) => !oldTeacherIds.includes(id),
+    );
+    for (const teacherId of addedTeachers) {
+      await User.findByIdAndUpdate(teacherId, {
+        $addToSet: { assignedSubjects: subject._id },
+      });
+    }
+  }
+
+  subject = await Subject.findByIdAndUpdate(req.params.id, fieldsToUpdate, {
+    new: true,
+    runValidators: true,
+  }).populate({
+    path: "teachers.teacher",
+    select: "firstName lastName email username",
+  });
+
+  res.status(200).json({
     success: true,
     data: subject,
   });
@@ -137,23 +357,23 @@ exports.getAllSubjects = asyncHandler(async (req, res, next) => {
   findQuery.isArchived = showArchived;
 
   if (req.user && req.user.role === "Teacher") {
-    findQuery.teacher = req.user.id;
+    findQuery["teachers.teacher"] = req.user.id;
   } else {
     if (req.query.teacher) {
-      findQuery.teacher = req.query.teacher;
+      findQuery["teachers.teacher"] = req.query.teacher;
     }
   }
 
   let queryStr = JSON.stringify(reqQuery);
   queryStr = queryStr.replace(
     /\b(gt|gte|lt|lte|in)\b/g,
-    (match) => `$${match}`
+    (match) => `$${match}`,
   );
   findQuery = { ...findQuery, ...JSON.parse(queryStr) };
 
   query = Subject.find(findQuery)
     .populate({
-      path: "teacher",
+      path: "teachers.teacher",
       select: "firstName lastName email",
     })
     .populate({
@@ -218,7 +438,7 @@ exports.getAllSubjects = asyncHandler(async (req, res, next) => {
 exports.getSubject = asyncHandler(async (req, res, next) => {
   const subject = await Subject.findById(req.params.id)
     .populate({
-      path: "teacher",
+      path: "teachers.teacher",
       select: "firstName lastName email",
     })
     .populate({
@@ -228,112 +448,8 @@ exports.getSubject = asyncHandler(async (req, res, next) => {
 
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${req.params.id}`, 404)
+      new ErrorResponse(`Subject not found with ID ${req.params.id}`, 404),
     );
-  }
-
-  res.status(200).json({
-    success: true,
-    data: subject,
-  });
-});
-
-// @desc    Update subject
-// @route   PUT /api/v1/subjects/:id
-// @access  Private/Admin
-exports.updateSubject = asyncHandler(async (req, res, next) => {
-  let subject = await Subject.findById(req.params.id);
-
-  if (!subject) {
-    return next(
-      new ErrorResponse(`Subject not found with ID ${req.params.id}`, 404)
-    );
-  }
-
-  const {
-    subjectName,
-    description,
-    teacherIdentifier,
-    gradeLevel,
-    section,
-    schoolYear,
-  } = req.body;
-
-  const fieldsToUpdate = {};
-  if (subjectName !== undefined) fieldsToUpdate.subjectName = subjectName;
-  if (description !== undefined) fieldsToUpdate.description = description;
-  if (gradeLevel !== undefined) fieldsToUpdate.gradeLevel = gradeLevel;
-  if (section !== undefined) fieldsToUpdate.section = section;
-  if (schoolYear !== undefined) fieldsToUpdate.schoolYear = schoolYear;
-
-  const oldTeacherId = subject.teacher ? subject.teacher.toString() : null;
-  let newTeacherId = oldTeacherId;
-
-  if (typeof teacherIdentifier !== "undefined") {
-    const trimmedIdentifier = teacherIdentifier.toString().trim();
-    if (
-      trimmedIdentifier === "" ||
-      trimmedIdentifier.toLowerCase() === "null"
-    ) {
-      fieldsToUpdate.teacher = null;
-      newTeacherId = null;
-    } else {
-      const teacher = await findUserByIdentifier(trimmedIdentifier, "Teacher");
-      if (!teacher) {
-        return next(
-          new ErrorResponse(
-            `Active teacher not found with identifier: ${trimmedIdentifier}`,
-            404
-          )
-        );
-      }
-
-      // Check if the new teacher already has 10 subjects (only if assigning to a different teacher)
-      if (oldTeacherId !== teacher._id.toString()) {
-        const teacherSubjectCount = await Subject.countDocuments({
-          teacher: teacher._id,
-          isArchived: false,
-        });
-
-        if (teacherSubjectCount >= 10) {
-          return next(
-            new ErrorResponse(
-              `${teacher.firstName} ${teacher.lastName} has already reached the maximum limit of 10 subjects. Please choose a different teacher or ask them to delete an existing subject.`,
-              400
-            )
-          );
-        }
-      }
-
-      fieldsToUpdate.teacher = teacher._id;
-      newTeacherId = teacher._id.toString();
-    }
-  }
-
-  subject = await Subject.findByIdAndUpdate(req.params.id, fieldsToUpdate, {
-    new: true,
-    runValidators: true,
-  })
-    .populate({
-      path: "teacher",
-      select: "firstName lastName email username",
-    })
-    .populate({
-      path: "students",
-      select: "firstName lastName email username userId",
-    });
-
-  if (oldTeacherId !== newTeacherId) {
-    if (oldTeacherId) {
-      await User.findByIdAndUpdate(oldTeacherId, {
-        $pull: { assignedSubjects: subject._id },
-      });
-    }
-    if (newTeacherId) {
-      await User.findByIdAndUpdate(newTeacherId, {
-        $addToSet: { assignedSubjects: subject._id },
-      });
-    }
   }
 
   res.status(200).json({
@@ -350,7 +466,7 @@ exports.deleteSubject = asyncHandler(async (req, res, next) => {
 
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${req.params.id}`, 404)
+      new ErrorResponse(`Subject not found with ID ${req.params.id}`, 404),
     );
   }
 
@@ -364,9 +480,9 @@ exports.deleteSubject = asyncHandler(async (req, res, next) => {
   subject.archivedBy = req.user.id;
   await subject.save();
 
-  // Unassign from teacher's assignedSubjects
-  if (subject.teacher) {
-    await User.findByIdAndUpdate(subject.teacher, {
+  // Unassign from all teachers' assignedSubjects
+  for (const teacherAssignment of subject.teachers) {
+    await User.findByIdAndUpdate(teacherAssignment.teacher, {
       $pull: { assignedSubjects: subject._id },
     });
   }
@@ -374,7 +490,7 @@ exports.deleteSubject = asyncHandler(async (req, res, next) => {
   // Unenroll all students from this subject
   await User.updateMany(
     { _id: { $in: subject.students }, role: "Student" },
-    { $pull: { enrolledSubjects: subject._id } }
+    { $pull: { enrolledSubjects: subject._id } },
   );
 
   res.status(200).json({
@@ -392,7 +508,7 @@ exports.restoreSubject = asyncHandler(async (req, res, next) => {
 
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${req.params.id}`, 404)
+      new ErrorResponse(`Subject not found with ID ${req.params.id}`, 404),
     );
   }
 
@@ -406,9 +522,9 @@ exports.restoreSubject = asyncHandler(async (req, res, next) => {
   subject.archivedBy = null;
   await subject.save();
 
-  // Re-assign to teacher's assignedSubjects
-  if (subject.teacher) {
-    await User.findByIdAndUpdate(subject.teacher, {
+  // Re-assign to all teachers' assignedSubjects
+  for (const teacherAssignment of subject.teachers) {
+    await User.findByIdAndUpdate(teacherAssignment.teacher, {
       $addToSet: { assignedSubjects: subject._id },
     });
   }
@@ -416,7 +532,7 @@ exports.restoreSubject = asyncHandler(async (req, res, next) => {
   // Re-enroll all students to this subject
   await User.updateMany(
     { _id: { $in: subject.students }, role: "Student" },
-    { $addToSet: { enrolledSubjects: subject._id } }
+    { $addToSet: { enrolledSubjects: subject._id } },
   );
 
   res.status(200).json({
@@ -434,7 +550,7 @@ exports.permanentDeleteSubject = asyncHandler(async (req, res, next) => {
 
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${req.params.id}`, 404)
+      new ErrorResponse(`Subject not found with ID ${req.params.id}`, 404),
     );
   }
 
@@ -442,14 +558,14 @@ exports.permanentDeleteSubject = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         "Subject must be archived before permanent deletion",
-        400
-      )
+        400,
+      ),
     );
   }
 
-  // Unassign from teacher's assignedSubjects
-  if (subject.teacher) {
-    await User.findByIdAndUpdate(subject.teacher, {
+  // Unassign from all teachers' assignedSubjects
+  for (const teacherAssignment of subject.teachers) {
+    await User.findByIdAndUpdate(teacherAssignment.teacher, {
       $pull: { assignedSubjects: subject._id },
     });
   }
@@ -457,7 +573,7 @@ exports.permanentDeleteSubject = asyncHandler(async (req, res, next) => {
   // Unenroll all students from this subject
   await User.updateMany(
     { _id: { $in: subject.students }, role: "Student" },
-    { $pull: { enrolledSubjects: subject._id } }
+    { $pull: { enrolledSubjects: subject._id } },
   );
 
   // Delete all activities associated with this subject
@@ -494,7 +610,7 @@ exports.assignTeacher = asyncHandler(async (req, res, next) => {
 
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404),
     );
   }
 
@@ -503,8 +619,8 @@ exports.assignTeacher = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         `Active teacher not found with identifier: ${teacherIdentifier}`,
-        404
-      )
+        404,
+      ),
     );
   }
 
@@ -521,8 +637,8 @@ exports.assignTeacher = asyncHandler(async (req, res, next) => {
       return next(
         new ErrorResponse(
           `${teacher.firstName} ${teacher.lastName} has already reached the maximum limit of 10 subjects. Please choose a different teacher or ask them to delete an existing subject.`,
-          400
-        )
+          400,
+        ),
       );
     }
   }
@@ -539,9 +655,8 @@ exports.assignTeacher = asyncHandler(async (req, res, next) => {
     $addToSet: { assignedSubjects: subject._id },
   });
 
-  const updatedSubject = await Subject.findById(subjectId).populate(
-    "teacher students"
-  );
+  const updatedSubject =
+    await Subject.findById(subjectId).populate("teacher students");
 
   res.status(200).json({
     success: true,
@@ -561,7 +676,7 @@ exports.unassignTeacher = asyncHandler(async (req, res, next) => {
 
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404),
     );
   }
 
@@ -580,9 +695,8 @@ exports.unassignTeacher = asyncHandler(async (req, res, next) => {
     $pull: { assignedSubjects: subject._id },
   });
 
-  const updatedSubject = await Subject.findById(subjectId).populate(
-    "teacher students"
-  );
+  const updatedSubject =
+    await Subject.findById(subjectId).populate("teacher students");
 
   res.status(200).json({
     success: true,
@@ -603,20 +717,24 @@ exports.enrollStudent = asyncHandler(async (req, res, next) => {
 
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404),
     );
   }
 
-  if (
-    req.user.role === "Teacher" &&
-    (!subject.teacher || !subject.teacher.equals(req.user.id))
-  ) {
-    return next(
-      new ErrorResponse(
-        "You are not authorized to enroll students in this subject.",
-        403
-      )
+  // Updated authorization check for teachers array
+  if (req.user.role === "Teacher") {
+    const isAssignedTeacher = subject.teachers.some(
+      (t) => t.teacher.toString() === req.user.id,
     );
+
+    if (!isAssignedTeacher) {
+      return next(
+        new ErrorResponse(
+          "You are not authorized to enroll students in this subject.",
+          403,
+        ),
+      );
+    }
   }
 
   // Check if subject has reached maximum capacity of 30 students
@@ -624,8 +742,8 @@ exports.enrollStudent = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         "Subject has reached maximum capacity of 30 students. Please remove a student before enrolling a new one.",
-        400
-      )
+        400,
+      ),
     );
   }
 
@@ -634,27 +752,30 @@ exports.enrollStudent = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         `Active student not found with identifier: ${studentIdentifier}`,
-        404
-      )
+        404,
+      ),
     );
   }
 
   if (subject.students.includes(student._id)) {
     return next(
-      new ErrorResponse("Student is already enrolled in this subject", 400)
+      new ErrorResponse("Student is already enrolled in this subject", 400),
     );
   }
 
   subject.students.push(student._id);
   await User.updateOne(
     { _id: student._id, role: "Student" },
-    { $addToSet: { enrolledSubjects: subjectId } }
+    { $addToSet: { enrolledSubjects: subjectId } },
   );
   await subject.save();
 
-  const updatedSubject = await Subject.findById(subjectId).populate(
-    "teacher students"
-  );
+  const updatedSubject = await Subject.findById(subjectId)
+    .populate({
+      path: "teachers.teacher",
+      select: "firstName lastName email",
+    })
+    .populate("students");
 
   res.status(200).json({
     success: true,
@@ -674,20 +795,24 @@ exports.unenrollStudent = asyncHandler(async (req, res, next) => {
 
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404),
     );
   }
 
-  if (
-    req.user.role === "Teacher" &&
-    (!subject.teacher || !subject.teacher.equals(req.user.id))
-  ) {
-    return next(
-      new ErrorResponse(
-        "You are not authorized to unenroll students from this subject.",
-        403
-      )
+  // Updated authorization check for teachers array
+  if (req.user.role === "Teacher") {
+    const isAssignedTeacher = subject.teachers.some(
+      (t) => t.teacher.toString() === req.user.id,
     );
+
+    if (!isAssignedTeacher) {
+      return next(
+        new ErrorResponse(
+          "You are not authorized to unenroll students from this subject.",
+          403,
+        ),
+      );
+    }
   }
 
   const student = await findUserByIdentifier(studentIdentifier, "Student");
@@ -695,29 +820,32 @@ exports.unenrollStudent = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         `Active student not found with identifier: ${studentIdentifier}`,
-        404
-      )
+        404,
+      ),
     );
   }
 
   if (!subject.students.includes(student._id)) {
     return next(
-      new ErrorResponse("Student is not enrolled in this subject", 400)
+      new ErrorResponse("Student is not enrolled in this subject", 400),
     );
   }
 
   subject.students = subject.students.filter(
-    (sId) => sId.toString() !== student._id.toString()
+    (sId) => sId.toString() !== student._id.toString(),
   );
   await User.updateOne(
     { _id: student._id, role: "Student" },
-    { $pull: { enrolledSubjects: subjectId } }
+    { $pull: { enrolledSubjects: subjectId } },
   );
   await subject.save();
 
-  const updatedSubject = await Subject.findById(subjectId).populate(
-    "teacher students"
-  );
+  const updatedSubject = await Subject.findById(subjectId)
+    .populate({
+      path: "teachers.teacher",
+      select: "firstName lastName email",
+    })
+    .populate("students");
 
   res.status(200).json({
     success: true,
@@ -736,7 +864,7 @@ exports.bulkEnrollStudents = asyncHandler(async (req, res, next) => {
 
   if (!Array.isArray(studentIdentifiers) || studentIdentifiers.length === 0) {
     return next(
-      new ErrorResponse("Please provide an array of student identifiers", 400)
+      new ErrorResponse("Please provide an array of student identifiers", 400),
     );
   }
 
@@ -744,20 +872,24 @@ exports.bulkEnrollStudents = asyncHandler(async (req, res, next) => {
 
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404),
     );
   }
 
-  if (
-    req.user.role === "Teacher" &&
-    (!subject.teacher || !subject.teacher.equals(req.user.id))
-  ) {
-    return next(
-      new ErrorResponse(
-        "You are not authorized to enroll students in this subject.",
-        403
-      )
+  // Updated authorization check for teachers array
+  if (req.user.role === "Teacher") {
+    const isAssignedTeacher = subject.teachers.some(
+      (t) => t.teacher.toString() === req.user.id,
     );
+
+    if (!isAssignedTeacher) {
+      return next(
+        new ErrorResponse(
+          "You are not authorized to enroll students in this subject.",
+          403,
+        ),
+      );
+    }
   }
 
   const successfullyEnrolled = [];
@@ -771,8 +903,8 @@ exports.bulkEnrollStudents = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         "Subject has reached maximum capacity of 30 students. Please remove enrolled students before adding new ones.",
-        400
-      )
+        400,
+      ),
     );
   }
 
@@ -809,7 +941,7 @@ exports.bulkEnrollStudents = asyncHandler(async (req, res, next) => {
       subject.students.push(student._id);
       await User.updateOne(
         { _id: student._id, role: "Student" },
-        { $addToSet: { enrolledSubjects: subjectId } }
+        { $addToSet: { enrolledSubjects: subjectId } },
       );
       successfullyEnrolled.push({
         studentId: student._id,
@@ -824,9 +956,12 @@ exports.bulkEnrollStudents = asyncHandler(async (req, res, next) => {
 
   await subject.save();
 
-  const updatedSubject = await Subject.findById(subjectId).populate(
-    "teacher students"
-  );
+  const updatedSubject = await Subject.findById(subjectId)
+    .populate({
+      path: "teachers.teacher",
+      select: "firstName lastName email",
+    })
+    .populate("students");
 
   // Create response message
   let message = `Bulk enrollment completed. Successfully enrolled: ${successfullyEnrolled.length}`;
@@ -851,4 +986,127 @@ exports.bulkEnrollStudents = asyncHandler(async (req, res, next) => {
     successfullyEnrolled,
     failedEnrollments,
   });
+});
+
+// Add this new function for uploading image
+exports.uploadSubjectImage = asyncHandler(async (req, res, next) => {
+  upload(req, res, async (err) => {
+    if (err) {
+      return next(new ErrorResponse(err.message, 400));
+    }
+
+    const subject = await Subject.findById(req.params.id);
+
+    if (!subject) {
+      return next(
+        new ErrorResponse(`Subject not found with ID ${req.params.id}`, 404),
+      );
+    }
+
+    // Check authorization
+    if (
+      req.user.role === "Teacher" &&
+      (!subject.teacher || !subject.teacher.equals(req.user.id))
+    ) {
+      return next(
+        new ErrorResponse("You are not authorized to update this subject", 403),
+      );
+    }
+
+    if (!req.file) {
+      return next(new ErrorResponse("Please upload an image file", 400));
+    }
+
+    try {
+      // Delete old image if exists
+      if (subject.subjectImage) {
+        try {
+          const oldFileName = subject.subjectImage
+            .split("/")
+            .pop()
+            .split("?")[0];
+          const oldFile = bucket.file(`subjects/${oldFileName}`);
+          await oldFile.delete();
+        } catch (deleteErr) {
+          console.error("Error deleting old image:", deleteErr);
+        }
+      }
+
+      // Upload new image to Firebase
+      const fileName = `subject_${subject._id}_${Date.now()}${path.extname(
+        req.file.originalname,
+      )}`;
+      const file = bucket.file(`subjects/${fileName}`);
+
+      await file.save(req.file.buffer, {
+        metadata: {
+          contentType: req.file.mimetype,
+        },
+      });
+
+      // Make the file publicly accessible
+      await file.makePublic();
+
+      // Get the public URL
+      const publicUrl = `https://storage.googleapis.com/${bucket.name}/subjects/${fileName}`;
+
+      // Update subject with new image URL
+      subject.subjectImage = publicUrl;
+      await subject.save();
+
+      res.status(200).json({
+        success: true,
+        message: "Subject image uploaded successfully",
+        data: subject,
+      });
+    } catch (uploadErr) {
+      console.error("Error uploading image:", uploadErr);
+      return next(new ErrorResponse("Error uploading image to storage", 500));
+    }
+  });
+});
+
+// Add this new function for deleting image
+exports.deleteSubjectImage = asyncHandler(async (req, res, next) => {
+  const subject = await Subject.findById(req.params.id);
+
+  if (!subject) {
+    return next(
+      new ErrorResponse(`Subject not found with ID ${req.params.id}`, 404),
+    );
+  }
+
+  // Check authorization
+  if (
+    req.user.role === "Teacher" &&
+    (!subject.teacher || !subject.teacher.equals(req.user.id))
+  ) {
+    return next(
+      new ErrorResponse("You are not authorized to update this subject", 403),
+    );
+  }
+
+  if (!subject.subjectImage) {
+    return next(new ErrorResponse("Subject does not have an image", 400));
+  }
+
+  try {
+    // Delete image from Firebase
+    const fileName = subject.subjectImage.split("/").pop().split("?")[0];
+    const file = bucket.file(`subjects/${fileName}`);
+    await file.delete();
+
+    // Remove image URL from subject
+    subject.subjectImage = null;
+    await subject.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Subject image deleted successfully",
+      data: subject,
+    });
+  } catch (deleteErr) {
+    console.error("Error deleting image:", deleteErr);
+    return next(new ErrorResponse("Error deleting image from storage", 500));
+  }
 });

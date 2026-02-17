@@ -6,6 +6,17 @@ const asyncHandler = require("../utils/asyncHandler");
 const { ErrorResponse } = require("../utils/errorResponse");
 const { bucket } = require("../config/firebaseService");
 
+// Helper function to check if user is assigned teacher
+const isAssignedTeacher = (subject, userId) => {
+  if (!subject.teachers || !Array.isArray(subject.teachers)) {
+    return false;
+  }
+  return subject.teachers.some((ta) => {
+    const teacherId = ta.teacher?._id || ta.teacher;
+    return teacherId && teacherId.toString() === userId.toString();
+  });
+};
+
 // @desc    Upload course materials for a subject (multiple files)
 // @route   POST /api/v1/subjects/:subjectId/courseMaterials
 // @access  Private/Teacher (assigned to the subject) or Private/Admin
@@ -17,7 +28,7 @@ exports.createCourseMaterial = asyncHandler(async (req, res, next) => {
 
   if (!mongoose.Types.ObjectId.isValid(subjectId)) {
     return next(
-      new ErrorResponse(`Invalid subject ID format: ${subjectId}`, 400)
+      new ErrorResponse(`Invalid subject ID format: ${subjectId}`, 400),
     );
   }
 
@@ -25,23 +36,27 @@ exports.createCourseMaterial = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse("At least one file is required", 400));
   }
 
-  const subject = await Subject.findById(subjectId);
+  const subject = await Subject.findById(subjectId).populate({
+    path: "teachers.teacher",
+    select: "_id email username",
+  });
+
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404),
     );
   }
 
   // Authorization: Only assigned teacher of the subject or admin can upload materials
-  if (
-    req.user.role === "Teacher" &&
-    (!subject.teacher || subject.teacher.toString() !== req.user.id)
-  ) {
+  const isTeacherAssigned = isAssignedTeacher(subject, req.user.id);
+  const isAdmin = req.user.role === "Admin";
+
+  if (!isTeacherAssigned && !isAdmin) {
     return next(
       new ErrorResponse(
         "Not authorized to upload materials to this subject",
-        403
-      )
+        403,
+      ),
     );
   }
 
@@ -119,7 +134,7 @@ exports.createCourseMaterial = asyncHandler(async (req, res, next) => {
         // Delete old file from Firebase Storage
         try {
           const oldFile = bucket.file(
-            `course-materials/${subjectId}/${existingMaterial.fileName}`
+            `course-materials/${subjectId}/${existingMaterial.fileName}`,
           );
           await oldFile.delete();
         } catch (err) {
@@ -137,7 +152,7 @@ exports.createCourseMaterial = asyncHandler(async (req, res, next) => {
         await existingMaterial.save();
         await existingMaterial.populate(
           "uploadedBy",
-          "firstName lastName email"
+          "firstName lastName email",
         );
 
         replacedMaterials.push(existingMaterial);
@@ -164,7 +179,7 @@ exports.createCourseMaterial = asyncHandler(async (req, res, next) => {
     } catch (error) {
       console.error(
         `Error processing file ${uploadedFile.originalname}:`,
-        error
+        error,
       );
       errors.push({
         fileName: uploadedFile.originalname,
@@ -202,36 +217,34 @@ exports.getCourseMaterialsForSubject = asyncHandler(async (req, res, next) => {
 
   if (!mongoose.Types.ObjectId.isValid(subjectId)) {
     return next(
-      new ErrorResponse(`Invalid subject ID format: ${subjectId}`, 400)
+      new ErrorResponse(`Invalid subject ID format: ${subjectId}`, 400),
     );
   }
 
-  const subject = await Subject.findById(subjectId);
+  const subject = await Subject.findById(subjectId).populate({
+    path: "teachers.teacher",
+    select: "_id email username",
+  });
+
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404),
     );
   }
 
   // Authorization check: Only enrolled students, assigned teacher, or admin can view materials
-  if (req.user.role === "Student" && !subject.students.includes(req.user.id)) {
-    return next(
-      new ErrorResponse(
-        "Not authorized to view materials for this subject",
-        403
-      )
-    );
-  }
+  const isEnrolledStudent =
+    req.user.role === "Student" && subject.students.includes(req.user.id);
 
-  if (
-    req.user.role === "Teacher" &&
-    (!subject.teacher || subject.teacher.toString() !== req.user.id)
-  ) {
+  const isTeacherAssigned = isAssignedTeacher(subject, req.user.id);
+  const isAdmin = req.user.role === "Admin";
+
+  if (!isEnrolledStudent && !isTeacherAssigned && !isAdmin) {
     return next(
       new ErrorResponse(
         "Not authorized to view materials for this subject",
-        403
-      )
+        403,
+      ),
     );
   }
 
@@ -254,34 +267,38 @@ exports.getCourseMaterial = asyncHandler(async (req, res, next) => {
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return next(
-      new ErrorResponse(`Invalid course material ID format: ${id}`, 400)
+      new ErrorResponse(`Invalid course material ID format: ${id}`, 400),
     );
   }
 
   const courseMaterial = await CourseMaterial.findById(id)
     .populate("uploadedBy", "firstName lastName email")
-    .populate("subject", "subjectName subjectCode teacher students");
+    .populate({
+      path: "subject",
+      select: "subjectName subjectCode teachers students",
+      populate: {
+        path: "teachers.teacher",
+        select: "_id email username",
+      },
+    });
 
   if (!courseMaterial) {
     return next(
-      new ErrorResponse(`Course material not found with ID ${id}`, 404)
+      new ErrorResponse(`Course material not found with ID ${id}`, 404),
     );
   }
 
   // Authorization check
   const subject = courseMaterial.subject;
-  if (req.user.role === "Student" && !subject.students.includes(req.user.id)) {
-    return next(
-      new ErrorResponse("Not authorized to view this course material", 403)
-    );
-  }
+  const isEnrolledStudent =
+    req.user.role === "Student" && subject.students.includes(req.user.id);
 
-  if (
-    req.user.role === "Teacher" &&
-    (!subject.teacher || subject.teacher.toString() !== req.user.id)
-  ) {
+  const isTeacherAssigned = isAssignedTeacher(subject, req.user.id);
+  const isAdmin = req.user.role === "Admin";
+
+  if (!isEnrolledStudent && !isTeacherAssigned && !isAdmin) {
     return next(
-      new ErrorResponse("Not authorized to view this course material", 403)
+      new ErrorResponse("Not authorized to view this course material", 403),
     );
   }
 
@@ -299,27 +316,34 @@ exports.deleteCourseMaterial = asyncHandler(async (req, res, next) => {
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return next(
-      new ErrorResponse(`Invalid course material ID format: ${id}`, 400)
+      new ErrorResponse(`Invalid course material ID format: ${id}`, 400),
     );
   }
 
-  const courseMaterial = await CourseMaterial.findById(id).populate("subject");
+  const courseMaterial = await CourseMaterial.findById(id).populate({
+    path: "subject",
+    select: "teachers",
+    populate: {
+      path: "teachers.teacher",
+      select: "_id email username",
+    },
+  });
 
   if (!courseMaterial) {
     return next(
-      new ErrorResponse(`Course material not found with ID ${id}`, 404)
+      new ErrorResponse(`Course material not found with ID ${id}`, 404),
     );
   }
 
   // Authorization: Only the uploader, assigned teacher, or admin can delete
   const subject = courseMaterial.subject;
-  if (
-    req.user.role === "Teacher" &&
-    courseMaterial.uploadedBy.toString() !== req.user.id &&
-    (!subject.teacher || subject.teacher.toString() !== req.user.id)
-  ) {
+  const isUploader = courseMaterial.uploadedBy.toString() === req.user.id;
+  const isTeacherAssigned = isAssignedTeacher(subject, req.user.id);
+  const isAdmin = req.user.role === "Admin";
+
+  if (!isUploader && !isTeacherAssigned && !isAdmin) {
     return next(
-      new ErrorResponse("Not authorized to delete this course material", 403)
+      new ErrorResponse("Not authorized to delete this course material", 403),
     );
   }
 

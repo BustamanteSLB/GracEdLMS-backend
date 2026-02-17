@@ -14,11 +14,16 @@ const { ErrorResponse } = require("../utils/errorResponse");
 // @access  Private/Teacher
 exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
   try {
-    // Get all subjects taught by the teacher
+    // Get all subjects taught by the teacher (check in teachers array)
     const subjects = await Subject.find({
-      teacher: req.user.id,
+      "teachers.teacher": req.user.id,
       isArchived: false,
-    }).populate("students", "firstName lastName email userId");
+    })
+      .populate({
+        path: "teachers.teacher",
+        select: "firstName lastName email",
+      })
+      .populate("students", "firstName lastName email userId");
 
     // Get all activities for teacher's subjects
     const subjectIds = subjects.map((subject) => subject._id);
@@ -65,11 +70,10 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
       });
     });
 
-    // Calculate grade distribution per student (same as admin logic)
+    // Calculate grade distribution per student
     for (const studentId of uniqueStudentIds) {
-      // Get all subjects for this student
       const studentSubjects = subjects.filter((subject) =>
-        subject.students.some((s) => s._id.toString() === studentId)
+        subject.students.some((s) => s._id.toString() === studentId),
       );
 
       if (studentSubjects.length === 0) continue;
@@ -77,39 +81,34 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
       let totalSubjectPercentages = 0;
       let validSubjectsCount = 0;
 
-      // Calculate percentage for each subject
       for (const subject of studentSubjects) {
-        // Get all activities for this subject
         const subjectActivities = activities.filter(
           (activity) =>
-            activity.subject._id.toString() === subject._id.toString()
+            activity.subject._id.toString() === subject._id.toString(),
         );
 
-        // Get all quizzes for this subject
         const subjectQuizzes = quizzes.filter(
           (quiz) =>
             quiz.subject &&
-            quiz.subject._id.toString() === subject._id.toString()
+            quiz.subject._id.toString() === subject._id.toString(),
         );
 
-        // Get all grades for this student in this subject
         const subjectGrades = grades.filter(
           (grade) =>
             grade.student._id.toString() === studentId &&
-            grade.subject._id.toString() === subject._id.toString()
+            grade.subject._id.toString() === subject._id.toString(),
         );
 
         let subjectTotalPossiblePoints = 0;
         let subjectTotalEarnedPoints = 0;
         let hasGradedItems = false;
 
-        // Add activity scores
         subjectActivities.forEach((activity) => {
           if (activity.points && activity.points > 0) {
             const grade = subjectGrades.find(
               (g) =>
                 g.activity &&
-                g.activity._id.toString() === activity._id.toString()
+                g.activity._id.toString() === activity._id.toString(),
             );
 
             if (grade) {
@@ -121,7 +120,6 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
           }
         });
 
-        // Add quiz scores
         subjectQuizzes.forEach((quiz) => {
           if (quiz.quizPoints && quiz.quizPoints > 0) {
             const submission = quiz.quizSubmissions?.find((sub) => {
@@ -146,7 +144,6 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
           }
         });
 
-        // Calculate subject percentage if there are graded items
         if (hasGradedItems && subjectTotalPossiblePoints > 0) {
           const subjectPercentage =
             (subjectTotalEarnedPoints / subjectTotalPossiblePoints) * 100;
@@ -155,11 +152,9 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
         }
       }
 
-      // Calculate overall average if student has grades in at least one subject
       if (validSubjectsCount > 0) {
         const overallAverage = totalSubjectPercentages / validSubjectsCount;
 
-        // Categorize into grade distribution
         if (overallAverage >= 90) {
           gradeDistribution.excellent++;
         } else if (overallAverage >= 80) {
@@ -175,12 +170,12 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
     // Process each subject
     subjects.forEach((subject) => {
       const subjectActivities = activities.filter(
-        (activity) => activity.subject._id.toString() === subject._id.toString()
+        (activity) =>
+          activity.subject._id.toString() === subject._id.toString(),
       );
 
       totalStudents += subject.students?.length || 0;
 
-      // Count pending submissions for this subject
       let subjectPending = 0;
       subjectActivities.forEach((activity) => {
         const submissions = activity.submissions || [];
@@ -188,17 +183,15 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
         const enrolledStudents = subject.students?.length || 0;
         subjectPending += Math.max(0, enrolledStudents - submittedStudents);
 
-        // Check for upcoming deadlines (within 7 days)
         const deadline = new Date(activity.deadline);
         const now = new Date();
         const daysUntilDeadline = Math.ceil(
-          (deadline.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+          (deadline.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
         );
         if (daysUntilDeadline <= 7 && daysUntilDeadline > 0) {
           upcomingDeadlines++;
         }
 
-        // Add submissions to recent activity
         submissions.forEach((submission) => {
           recentActivity.push({
             type: "submission",
@@ -222,11 +215,9 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
       });
     });
 
-    // Process grades for recent activity
     grades.forEach((grade) => {
       recentGrades++;
 
-      // Add to recent activity
       recentActivity.push({
         type: "grade",
         title: grade.activity?.title || "Unknown Activity",
@@ -238,7 +229,6 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
       });
     });
 
-    // Add quiz activities to recent activity
     quizzes.forEach((quiz) => {
       recentActivity.push({
         type: "quiz",
@@ -248,9 +238,8 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
       });
     });
 
-    // Sort recent activity by date (most recent first)
     recentActivity.sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
     );
 
     const analyticsData = {
@@ -262,7 +251,7 @@ exports.getTeacherAnalytics = asyncHandler(async (req, res, next) => {
       recentGrades,
       upcomingDeadlines,
       subjectBreakdown,
-      recentActivity: recentActivity.slice(0, 10), // Latest 10 activities
+      recentActivity: recentActivity.slice(0, 10),
       gradeDistribution,
     };
 
@@ -289,7 +278,7 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
     const enrolledSubjects = await Subject.find({
       students: studentId,
       isArchived: false,
-    }).populate("teacher", "firstName lastName email");
+    }).populate("teachers.teacher", "firstName lastName email");
 
     const subjectIds = enrolledSubjects.map((subject) => subject._id);
     console.log("Enrolled subjects:", enrolledSubjects.length);
@@ -313,7 +302,7 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
 
     console.log(
       "Activities found (before filtering):",
-      activitiesDueToday.length
+      activitiesDueToday.length,
     );
 
     // 4. Get published quizzes (no specific deadline filtering for quizzes)
@@ -351,7 +340,7 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
     for (const activity of activitiesDueToday) {
       // Check if student has submitted
       const submission = activity.submissions.find(
-        (sub) => sub.student.toString() === studentId
+        (sub) => sub.student.toString() === studentId,
       );
 
       // Check if activity is graded
@@ -376,7 +365,7 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
         // Only show completed items if they were submitted today or are awaiting grading
         const submissionDate = new Date(submission.submissionDate);
         const daysSinceSubmission = Math.floor(
-          (today.getTime() - submissionDate.getTime()) / (1000 * 60 * 60 * 24)
+          (today.getTime() - submissionDate.getTime()) / (1000 * 60 * 60 * 24),
         );
         shouldShow = daysSinceSubmission <= 1; // Show if submitted today or yesterday
       } else {
@@ -412,7 +401,7 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
     for (const quiz of availableQuizzes) {
       // Check if student has submitted
       const submission = quiz.quizSubmissions.find(
-        (sub) => sub.student.toString() === studentId
+        (sub) => sub.student.toString() === studentId,
       );
 
       let status = "pending";
@@ -427,7 +416,8 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
           // Only show if completed today
           const submissionDate = new Date(submission.submissionDate);
           const daysSinceSubmission = Math.floor(
-            (today.getTime() - submissionDate.getTime()) / (1000 * 60 * 60 * 24)
+            (today.getTime() - submissionDate.getTime()) /
+              (1000 * 60 * 60 * 24),
           );
           shouldShow = daysSinceSubmission <= 1;
         }
@@ -455,42 +445,42 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
 
     console.log(
       "Filtered activities for due today:",
-      processedActivities.length
+      processedActivities.length,
     );
     console.log("Filtered quizzes for due today:", processedQuizzes.length);
 
     // 9. Calculate completion statistics for all activities/quizzes
     const completedActivities = allActivities.filter((activity) =>
       activity.submissions.some(
-        (submission) => submission.student.toString() === studentId
-      )
+        (submission) => submission.student.toString() === studentId,
+      ),
     );
 
     const completedQuizzes = allQuizzes.filter((quiz) =>
       quiz.quizSubmissions.some(
-        (submission) => submission.student.toString() === studentId
-      )
+        (submission) => submission.student.toString() === studentId,
+      ),
     );
 
     // 10. Filter today's items by status
     const pendingTodayActivities = processedActivities.filter(
-      (activity) => activity.status === "pending"
+      (activity) => activity.status === "pending",
     );
     const completedTodayActivities = processedActivities.filter(
-      (activity) => activity.status === "completed"
+      (activity) => activity.status === "completed",
     );
     const gradedTodayActivities = processedActivities.filter(
-      (activity) => activity.status === "graded"
+      (activity) => activity.status === "graded",
     );
 
     const pendingTodayQuizzes = processedQuizzes.filter(
-      (quiz) => quiz.status === "pending"
+      (quiz) => quiz.status === "pending",
     );
     const completedTodayQuizzes = processedQuizzes.filter(
-      (quiz) => quiz.status === "completed"
+      (quiz) => quiz.status === "completed",
     );
     const gradedTodayQuizzes = processedQuizzes.filter(
-      (quiz) => quiz.status === "graded"
+      (quiz) => quiz.status === "graded",
     );
 
     // 11. Get latest 2 announcements from all enrolled subjects
@@ -498,7 +488,7 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
       subject: { $in: subjectIds },
     })
       .populate("subject", "subjectName")
-      .populate("createdBy", "firstName lastName email profilePicture") // Added profilePicture
+      .populate("createdBy", "firstName lastName email profilePicture")
       .sort({ createdAt: -1 })
       .limit(2);
 
@@ -539,22 +529,26 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
       .sort({ updatedAt: -1 })
       .limit(5);
 
+    // Updated: Map teachers array to single teacher for display
+    const enrolledSubjectsForDisplay = enrolledSubjects.map((subject) => ({
+      _id: subject._id,
+      subjectName: subject.subjectName,
+      teacher:
+        subject.teachers && subject.teachers.length > 0
+          ? {
+              firstName: subject.teachers[0].teacher.firstName,
+              lastName: subject.teachers[0].teacher.lastName,
+              email: subject.teachers[0].teacher.email,
+            }
+          : null,
+      gradeLevel: subject.gradeLevel,
+      section: subject.section,
+    }));
+
     const analyticsData = {
       enrolledSubjects: {
         count: enrolledSubjects.length,
-        subjects: enrolledSubjects.map((subject) => ({
-          _id: subject._id,
-          subjectName: subject.subjectName,
-          teacher: subject.teacher
-            ? {
-                firstName: subject.teacher.firstName,
-                lastName: subject.teacher.lastName,
-                email: subject.teacher.email,
-              }
-            : null,
-          gradeLevel: subject.gradeLevel,
-          section: subject.section,
-        })),
+        subjects: enrolledSubjectsForDisplay,
       },
       duesToday: {
         totalCount: processedActivities.length + processedQuizzes.length,
@@ -584,7 +578,7 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
         activitiesCompletionRate:
           allActivities.length > 0
             ? Math.round(
-                (completedActivities.length / allActivities.length) * 100
+                (completedActivities.length / allActivities.length) * 100,
               )
             : 0,
         quizzesCompletionRate:
@@ -601,7 +595,7 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
         author: {
           firstName: announcement.createdBy.firstName,
           lastName: announcement.createdBy.lastName,
-          profilePicture: announcement.createdBy.profilePicture, // Added profilePicture
+          profilePicture: announcement.createdBy.profilePicture,
         },
       })),
       events: eventsDueToday.map((event) => ({
@@ -646,7 +640,7 @@ exports.getStudentAnalytics = asyncHandler(async (req, res, next) => {
   } catch (error) {
     console.error("Error fetching student analytics:", error);
     return next(
-      new ErrorResponse("Failed to fetch student analytics data", 500)
+      new ErrorResponse("Failed to fetch student analytics data", 500),
     );
   }
 });
@@ -658,7 +652,6 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
   const { schoolYear, gradeLevel } = req.query;
 
   try {
-    // Get current school year if not provided
     const currentYear = new Date().getFullYear();
     const defaultSchoolYear =
       schoolYear || `${currentYear} - ${currentYear + 1}`;
@@ -674,14 +667,12 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
     for (let grade = 1; grade <= 6; grade++) {
       const gradeString = `Grade ${grade}`;
 
-      // Get subjects for this grade and school year
       const gradeSubjects = await Subject.find({
         gradeLevel: gradeString,
         schoolYear: defaultSchoolYear,
         isArchived: false,
       }).populate("students", "firstName lastName email sex userId");
 
-      // Count unique students across all subjects for this grade
       const uniqueStudentIds = new Set();
       gradeSubjects.forEach((subject) => {
         subject.students.forEach((student) => {
@@ -696,47 +687,44 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
       });
     }
 
-    // 2. Get teachers by grade level (1-6)
+    // 2. Get teachers by grade level - Updated for teachers array
     const teachersByGrade = [];
     for (let grade = 1; grade <= 6; grade++) {
       const gradeString = `Grade ${grade}`;
 
-      // Get unique teachers for this grade level
       const gradeSubjects = await Subject.find({
         gradeLevel: gradeString,
         schoolYear: defaultSchoolYear,
         isArchived: false,
-        teacher: { $ne: null },
-      }).populate("teacher", "firstName lastName email userId");
+        "teachers.teacher": { $ne: null },
+      }).populate("teachers.teacher", "firstName lastName email userId");
 
-      const uniqueTeachers = [];
-      const teacherIds = new Set();
+      const uniqueTeachers = new Map();
 
       gradeSubjects.forEach((subject) => {
-        if (
-          subject.teacher &&
-          !teacherIds.has(subject.teacher._id.toString())
-        ) {
-          teacherIds.add(subject.teacher._id.toString());
-          uniqueTeachers.push({
-            _id: subject.teacher._id,
-            firstName: subject.teacher.firstName,
-            lastName: subject.teacher.lastName,
-            email: subject.teacher.email,
-            userId: subject.teacher.userId,
-            subjectsCount: gradeSubjects.filter(
-              (s) =>
-                s.teacher &&
-                s.teacher._id.toString() === subject.teacher._id.toString()
-            ).length,
-          });
-        }
+        subject.teachers.forEach((ta) => {
+          const teacher = ta.teacher;
+          if (teacher && !uniqueTeachers.has(teacher._id.toString())) {
+            const subjectsCount = gradeSubjects.filter((s) =>
+              s.teachers.some((t) => t.teacher._id.equals(teacher._id)),
+            ).length;
+
+            uniqueTeachers.set(teacher._id.toString(), {
+              _id: teacher._id,
+              firstName: teacher.firstName,
+              lastName: teacher.lastName,
+              email: teacher.email,
+              userId: teacher.userId,
+              subjectsCount,
+            });
+          }
+        });
       });
 
       teachersByGrade.push({
         grade: gradeString,
-        teachers: uniqueTeachers,
-        totalTeachers: uniqueTeachers.length,
+        teachers: Array.from(uniqueTeachers.values()),
+        totalTeachers: uniqueTeachers.size,
       });
     }
 
@@ -747,10 +735,9 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
       isArchived: false,
     }).populate(
       "students",
-      "firstName lastName email sex userId profilePicture"
+      "firstName lastName email sex userId profilePicture",
     );
 
-    // Get unique students for the selected grade
     const uniqueStudents = new Map();
     selectedGradeSubjects.forEach((subject) => {
       subject.students.forEach((student) => {
@@ -762,17 +749,16 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
 
     const studentsArray = Array.from(uniqueStudents.values());
     const femaleStudents = studentsArray.filter(
-      (student) => student.sex && student.sex.toLowerCase() === "female"
+      (student) => student.sex && student.sex.toLowerCase() === "female",
     );
     const maleStudents = studentsArray.filter(
-      (student) => student.sex && student.sex.toLowerCase() === "male"
+      (student) => student.sex && student.sex.toLowerCase() === "male",
     );
 
-    // 4. Calculate honor students (90% average or above) for selected grade
+    // 4. Calculate honor students (90% average or above)
     const honorStudents = [];
 
     for (const student of studentsArray) {
-      // Get all subjects for this student in the selected grade level
       const studentSubjects = await Subject.find({
         gradeLevel: selectedGrade,
         schoolYear: defaultSchoolYear,
@@ -785,20 +771,16 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
       let totalSubjectPercentages = 0;
       let validSubjectsCount = 0;
 
-      // Calculate percentage for each subject
       for (const subject of studentSubjects) {
-        // Get all activities for this subject
         const subjectActivities = await Activity.find({
           subject: subject._id,
         });
 
-        // Get all quizzes for this subject
         const subjectQuizzes = await Quiz.find({
           subject: subject._id,
           status: { $in: ["published", "graded", "closed"] },
         });
 
-        // Get all grades for this student in this subject
         const subjectGrades = await Grade.find({
           student: student._id,
           subject: subject._id,
@@ -808,13 +790,12 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
         let subjectTotalEarnedPoints = 0;
         let hasGradedItems = false;
 
-        // Add activity scores
         subjectActivities.forEach((activity) => {
           if (activity.points && activity.points > 0) {
             const grade = subjectGrades.find(
               (g) =>
                 g.activity &&
-                g.activity._id.toString() === activity._id.toString()
+                g.activity._id.toString() === activity._id.toString(),
             );
 
             if (grade) {
@@ -826,7 +807,6 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
           }
         });
 
-        // Add quiz scores
         subjectQuizzes.forEach((quiz) => {
           if (quiz.quizPoints && quiz.quizPoints > 0) {
             const submission = quiz.quizSubmissions?.find((sub) => {
@@ -851,36 +831,16 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
           }
         });
 
-        // Calculate subject percentage if there are graded items
         if (hasGradedItems && subjectTotalPossiblePoints > 0) {
           const subjectPercentage =
             (subjectTotalEarnedPoints / subjectTotalPossiblePoints) * 100;
           totalSubjectPercentages += subjectPercentage;
           validSubjectsCount++;
-
-          console.log(
-            `Subject ${subject.subjectName} for ${student.firstName} ${student.lastName}:`,
-            {
-              totalPossible: subjectTotalPossiblePoints,
-              totalEarned: subjectTotalEarnedPoints,
-              percentage: subjectPercentage.toFixed(2) + "%",
-            }
-          );
         }
       }
 
-      // Calculate overall average if student has grades in at least one subject
       if (validSubjectsCount > 0) {
         const overallAverage = totalSubjectPercentages / validSubjectsCount;
-
-        console.log(
-          `Student ${student.firstName} ${student.lastName} overall calculation:`,
-          {
-            totalSubjectPercentages: totalSubjectPercentages.toFixed(2),
-            validSubjectsCount,
-            overallAverage: overallAverage.toFixed(2) + "%",
-          }
-        );
 
         if (overallAverage >= 90) {
           honorStudents.push({
@@ -890,7 +850,6 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
             totalSubjectsEnrolled: studentSubjects.length,
             subjectBreakdown: await Promise.all(
               studentSubjects.map(async (subject) => {
-                // Get detailed breakdown for each subject
                 const subjectActivities = await Activity.find({
                   subject: subject._id,
                 });
@@ -907,13 +866,12 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
                 let subjectTotalEarnedPoints = 0;
                 let hasGradedItems = false;
 
-                // Calculate for this subject
                 subjectActivities.forEach((activity) => {
                   if (activity.points && activity.points > 0) {
                     const grade = subjectGrades.find(
                       (g) =>
                         g.activity &&
-                        g.activity._id.toString() === activity._id.toString()
+                        g.activity._id.toString() === activity._id.toString(),
                     );
                     if (grade) {
                       subjectTotalPossiblePoints += activity.points;
@@ -963,32 +921,19 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
                   totalEarnedPoints: subjectTotalEarnedPoints,
                   hasGrades: hasGradedItems,
                 };
-              })
+              }),
             ),
           });
         }
       }
     }
 
-    // Sort honor students by average grade (highest first)
     honorStudents.sort((a, b) => b.averageGrade - a.averageGrade);
 
-    console.log(
-      `Honor students calculation complete. Found ${honorStudents.length} honor students:`,
-      honorStudents.map((s) => ({
-        name: `${s.firstName} ${s.lastName}`,
-        average: s.averageGrade + "%",
-        subjectsWithGrades: s.subjectsWithGrades,
-        totalSubjects: s.totalSubjectsEnrolled,
-      }))
-    );
-
-    // 5. Get available school years for dropdown
     const availableSchoolYears = await Subject.distinct("schoolYear", {
       isArchived: false,
     });
 
-    // 6. Get summary statistics
     const totalStudents = studentsArray.length;
     const totalTeachers = await User.countDocuments({
       role: "Teacher",
@@ -1026,13 +971,6 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
       },
     };
 
-    console.log("Analytics Data Summary:", {
-      enrollmentCount: enrollmentByGrade.length,
-      teachersCount: teachersByGrade.length,
-      selectedGradeStudents: totalStudents,
-      honorStudentsCount: honorStudents.length,
-    });
-
     res.status(200).json({
       success: true,
       data: analyticsData,
@@ -1053,18 +991,27 @@ exports.getSubjectGrades = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse("Invalid subject ID format", 400));
   }
 
-  const subject = await Subject.findById(subjectId);
+  const subject =
+    await Subject.findById(subjectId).populate("teachers.teacher");
   if (!subject) {
     return next(new ErrorResponse("Subject not found", 404));
   }
 
-  // Authorization check
-  if (
+  // Updated authorization check - check teachers array instead of single teacher
+  const isAssignedTeacher =
     req.user.role === "Teacher" &&
-    (!subject.teacher || subject.teacher.toString() !== req.user.id)
-  ) {
+    subject.teachers &&
+    subject.teachers.some(
+      (ta) =>
+        ta.teacher &&
+        (ta.teacher._id.equals(req.user.id) ||
+          ta.teacher.email === req.user.email ||
+          ta.teacher.username === req.user.username),
+    );
+
+  if (req.user.role === "Teacher" && !isAssignedTeacher) {
     return next(
-      new ErrorResponse("Not authorized to view grades for this subject", 403)
+      new ErrorResponse("Not authorized to view grades for this subject", 403),
     );
   }
 
@@ -1100,7 +1047,7 @@ exports.getGradeStudentDetails = asyncHandler(async (req, res, next) => {
       isArchived: false,
     }).populate(
       "students",
-      "firstName lastName email sex userId profilePicture"
+      "firstName lastName email sex userId profilePicture",
     );
 
     // Get unique students for the grade
@@ -1128,7 +1075,7 @@ exports.getGradeStudentDetails = asyncHandler(async (req, res, next) => {
     if (gender && gender !== "all") {
       studentsArray = studentsArray.filter(
         (student) =>
-          student.sex && student.sex.toLowerCase() === gender.toLowerCase()
+          student.sex && student.sex.toLowerCase() === gender.toLowerCase(),
       );
     }
 

@@ -15,32 +15,29 @@ exports.gradeActivity = asyncHandler(async (req, res, next) => {
 
   if (!mongoose.Types.ObjectId.isValid(activityId)) {
     return next(
-      new ErrorResponse(`Invalid activity ID format: ${activityId}`, 400)
+      new ErrorResponse(`Invalid activity ID format: ${activityId}`, 400),
     );
   }
   if (!studentId || !mongoose.Types.ObjectId.isValid(studentId)) {
     return next(
-      new ErrorResponse("Student ID is required and must be valid", 400)
+      new ErrorResponse("Student ID is required and must be valid", 400),
     );
   }
 
-  // Better score validation - handle both string and number inputs
   if (score === undefined || score === null || score === "") {
     return next(new ErrorResponse("Score is required", 400));
   }
 
-  // Convert to number and validate
   const numericScore = Number(score);
   if (isNaN(numericScore) || numericScore < 0) {
     return next(
       new ErrorResponse(
         "Score must be a valid number greater than or equal to 0",
-        400
-      )
+        400,
+      ),
     );
   }
 
-  // Convert bonus points if provided
   let numericBonusPoints = undefined;
   if (bonusPoints !== undefined && bonusPoints !== null && bonusPoints !== "") {
     numericBonusPoints = Number(bonusPoints);
@@ -48,82 +45,86 @@ exports.gradeActivity = asyncHandler(async (req, res, next) => {
       return next(
         new ErrorResponse(
           "Bonus points must be a valid number greater than or equal to 0",
-          400
-        )
+          400,
+        ),
       );
     }
   }
 
-  console.log("🔍 Backend received:", {
-    originalScore: score,
-    numericScore: numericScore,
-    originalBonusPoints: bonusPoints,
-    numericBonusPoints: numericBonusPoints,
+  const activity = await Activity.findById(activityId).populate({
+    path: "subject",
+    populate: {
+      path: "teachers.teacher",
+    },
   });
-
-  const activity = await Activity.findById(activityId).populate("subject");
   if (!activity) {
     return next(
-      new ErrorResponse(`Activity not found with ID ${activityId}`, 404)
+      new ErrorResponse(`Activity not found with ID ${activityId}`, 404),
     );
   }
   const subject = activity.subject;
 
   // Authorization: Only assigned teacher or admin can grade
-  if (
+  // Updated to check teachers array
+  const isAssignedTeacher =
     req.user.role === "Teacher" &&
-    (!subject.teacher || subject.teacher.toString() !== req.user._id.toString())
-  ) {
+    subject.teachers &&
+    subject.teachers.some(
+      (ta) =>
+        ta.teacher &&
+        (ta.teacher._id.equals(req.user._id) ||
+          ta.teacher.email === req.user.email ||
+          ta.teacher.username === req.user.username),
+    );
+
+  const isAdmin = req.user.role === "Admin";
+
+  if (!isAssignedTeacher && !isAdmin) {
     return next(
       new ErrorResponse(
         "You are not authorized to grade activities for this subject.",
-        403
-      )
+        403,
+      ),
     );
   }
 
   const student = await User.findOne({ _id: studentId, role: "Student" });
   if (!student) {
     return next(
-      new ErrorResponse(`Student not found with ID ${studentId}`, 404)
+      new ErrorResponse(`Student not found with ID ${studentId}`, 404),
     );
   }
 
-  // Check if student is enrolled in the subject
   if (!subject.students.some((s) => s.toString() === studentId.toString())) {
     return next(
       new ErrorResponse(
         `Student ${student.firstName} ${student.lastName} is not enrolled in subject ${subject.subjectName}.`,
-        400
-      )
+        400,
+      ),
     );
   }
 
-  // Validate score against activity points
   if (activity.points && numericScore > activity.points) {
     return next(
-      new ErrorResponse(`Score must be between 0 and ${activity.points}.`, 400)
+      new ErrorResponse(`Score must be between 0 and ${activity.points}.`, 400),
     );
   }
 
-  // Upsert: Create or update grade
   const gradeData = {
     student: studentId,
     activity: activityId,
     subject: subject._id,
-    quarter: activity.quarter, // Include the quarter from the activity
-    score: numericScore, // Use the validated numeric score
-    bonusPoints: numericBonusPoints, // Will be undefined if not provided
+    quarter: activity.quarter,
+    score: numericScore,
+    bonusPoints: numericBonusPoints,
     comments: comments || undefined,
     gradedBy: req.user.id,
   };
 
-  console.log("💾 Saving grade data:", gradeData);
-
   const grade = await Grade.findOneAndUpdate(
     { student: studentId, activity: activityId },
     gradeData,
-    { new: true, upsert: true, runValidators: true }
+    { new: true, upsert: true, runValidators: true },
   ).populate([
     {
       path: "student",
@@ -134,15 +135,67 @@ exports.gradeActivity = asyncHandler(async (req, res, next) => {
     { path: "gradedBy", select: "firstName lastName" },
   ]);
 
-  console.log("✅ Grade saved:", {
-    gradeId: grade._id,
-    savedScore: grade.score,
-    savedBonusPoints: grade.bonusPoints,
-  });
-
   res.status(201).json({
     success: true,
     data: grade,
+  });
+});
+
+// @desc    Get all grades for a specific activity (for teacher/admin view)
+// @route   GET /api/v1/activities/:activityId/grades
+// @access  Private (Assigned Teacher, Admin)
+exports.getActivityGrades = asyncHandler(async (req, res, next) => {
+  const { activityId } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(activityId)) {
+    return next(new ErrorResponse("Invalid activity ID format", 400));
+  }
+
+  const activity = await Activity.findById(activityId).populate({
+    path: "subject",
+    populate: {
+      path: "teachers.teacher",
+    },
+  });
+  if (!activity) return next(new ErrorResponse("Activity not found", 404));
+
+  // Authorization - Updated to check teachers array
+  const subject = activity.subject;
+  const isAssignedTeacher =
+    req.user.role === "Teacher" &&
+    subject.teachers &&
+    subject.teachers.some(
+      (ta) =>
+        ta.teacher &&
+        (ta.teacher._id.equals(req.user._id) ||
+          ta.teacher.email === req.user.email ||
+          ta.teacher.username === req.user.username),
+    );
+
+  const isAdmin = req.user.role === "Admin";
+
+  if (!isAssignedTeacher && !isAdmin) {
+    return next(
+      new ErrorResponse(
+        "Not authorized to view grades for this activity.",
+        403,
+      ),
+    );
+  }
+
+  const grades = await Grade.find({ activity: activityId })
+    .populate({
+      path: "student",
+      select: "firstName lastName email username userId profilePicture",
+    })
+    .populate({ path: "activity", select: "title points deadline" })
+    .populate({ path: "subject", select: "subjectName section" })
+    .populate({ path: "gradedBy", select: "firstName lastName" })
+    .sort({ "student.lastName": 1 });
+
+  res.status(200).json({
+    success: true,
+    count: grades.length,
+    data: grades,
   });
 });
 
@@ -159,19 +212,28 @@ exports.getStudentGradesForSubject = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse("Invalid subject or student ID format", 400));
   }
 
-  const subject = await Subject.findById(subjectId);
+  const subject = await Subject.findById(subjectId).populate({
+    path: "teachers.teacher",
+  });
   if (!subject) return next(new ErrorResponse("Subject not found", 404));
 
   const student = await User.findById(studentId);
   if (!student || student.role !== "Student")
     return next(new ErrorResponse("Student not found", 404));
 
-  // Authorization
+  // Authorization - Updated to check teachers array
   const isStudentOwner = req.user._id.toString() === studentId.toString();
   const isAssignedTeacher =
     req.user.role === "Teacher" &&
-    subject.teacher &&
-    subject.teacher.toString() === req.user._id.toString();
+    subject.teachers &&
+    subject.teachers.some(
+      (ta) =>
+        ta.teacher &&
+        (ta.teacher._id.equals(req.user._id) ||
+          ta.teacher.email === req.user.email ||
+          ta.teacher.username === req.user.username),
+    );
+
   const isAdmin = req.user.role === "Admin";
 
   if (!isStudentOwner && !isAssignedTeacher && !isAdmin) {
@@ -182,48 +244,6 @@ exports.getStudentGradesForSubject = asyncHandler(async (req, res, next) => {
     .populate({ path: "activity", select: "title points deadline" })
     .populate({ path: "gradedBy", select: "firstName lastName" })
     .sort({ "activity.deadline": 1 });
-
-  res.status(200).json({
-    success: true,
-    count: grades.length,
-    data: grades,
-  });
-});
-
-// @desc    Get all grades for a specific activity (for teacher/admin view)
-// @route   GET /api/v1/activities/:activityId/grades
-// @access  Private (Assigned Teacher, Admin)
-exports.getActivityGrades = asyncHandler(async (req, res, next) => {
-  const { activityId } = req.params;
-  if (!mongoose.Types.ObjectId.isValid(activityId)) {
-    return next(new ErrorResponse("Invalid activity ID format", 400));
-  }
-
-  const activity = await Activity.findById(activityId).populate("subject");
-  if (!activity) return next(new ErrorResponse("Activity not found", 404));
-
-  // Authorization
-  const isAssignedTeacher =
-    req.user.role === "Teacher" &&
-    activity.subject.teacher &&
-    activity.subject.teacher.toString() === req.user._id.toString();
-  const isAdmin = req.user.role === "Admin";
-
-  if (!isAssignedTeacher && !isAdmin) {
-    return next(
-      new ErrorResponse("Not authorized to view grades for this activity.", 403)
-    );
-  }
-
-  const grades = await Grade.find({ activity: activityId })
-    .populate({
-      path: "student",
-      select: "firstName lastName email username userId profilePicture",
-    })
-    .populate({ path: "activity", select: "title points deadline" })
-    .populate({ path: "subject", select: "subjectName section" })
-    .populate({ path: "gradedBy", select: "firstName lastName" })
-    .sort({ "student.lastName": 1 });
 
   res.status(200).json({
     success: true,
@@ -255,14 +275,6 @@ exports.updateGrade = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse("Not authorized to update this grade.", 403));
   }
 
-  console.log("🔄 Updating grade:", {
-    gradeId: gradeId,
-    currentScore: grade.score,
-    newScore: score,
-    currentBonusPoints: grade.bonusPoints,
-    newBonusPoints: bonusPoints,
-  });
-
   // Update score if provided
   if (score !== undefined && score !== null) {
     const numericScore = Number(score);
@@ -270,16 +282,16 @@ exports.updateGrade = asyncHandler(async (req, res, next) => {
       return next(
         new ErrorResponse(
           "Score must be a valid number greater than or equal to 0",
-          400
-        )
+          400,
+        ),
       );
     }
     if (grade.activity.points && numericScore > grade.activity.points) {
       return next(
         new ErrorResponse(
           `Score must be between 0 and ${grade.activity.points}.`,
-          400
-        )
+          400,
+        ),
       );
     }
     grade.score = numericScore;
@@ -295,8 +307,8 @@ exports.updateGrade = asyncHandler(async (req, res, next) => {
         return next(
           new ErrorResponse(
             "Bonus points must be a valid number greater than or equal to 0",
-            400
-          )
+            400,
+          ),
         );
       }
       grade.bonusPoints = numericBonusPoints;
@@ -311,12 +323,6 @@ exports.updateGrade = asyncHandler(async (req, res, next) => {
   grade.gradedBy = req.user.id;
 
   await grade.save();
-
-  console.log("✅ Grade updated:", {
-    gradeId: grade._id,
-    updatedScore: grade.score,
-    updatedBonusPoints: grade.bonusPoints,
-  });
 
   // Populate the updated grade for response
   await grade.populate([
@@ -383,14 +389,14 @@ exports.getStudentActivityGradesOverview = asyncHandler(
       req.user.role !== "Admin"
     ) {
       return next(
-        new ErrorResponse("Not authorized to view these grades.", 403)
+        new ErrorResponse("Not authorized to view these grades.", 403),
       );
     }
 
     const studentUser = await User.findById(studentId);
     if (!studentUser || studentUser.role !== "Student") {
       return next(
-        new ErrorResponse("Student not found or not a student role", 404)
+        new ErrorResponse("Student not found or not a student role", 404),
       );
     }
 
@@ -414,7 +420,7 @@ exports.getStudentActivityGradesOverview = asyncHandler(
         // Check if the student has a submission for this activity
         if (activity.submissions && activity.submissions.length > 0) {
           studentSubmission = activity.submissions.find((sub) =>
-            sub.student.equals(studentId)
+            sub.student.equals(studentId),
           );
         }
 
@@ -470,5 +476,5 @@ exports.getStudentActivityGradesOverview = asyncHandler(
       count: gradesOverview.length,
       data: gradesOverview,
     });
-  }
+  },
 );

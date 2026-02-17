@@ -4,6 +4,19 @@ const asyncHandler = require("../utils/asyncHandler");
 const { ErrorResponse } = require("../utils/errorResponse");
 const mongoose = require("mongoose");
 
+// Helper function to normalize dates based on isAllDay flag
+const normalizeDateForEvent = (dateString, isAllDay = true) => {
+  const date = new Date(dateString);
+
+  if (isAllDay) {
+    // For all-day events, set to midnight UTC
+    date.setUTCHours(0, 0, 0, 0);
+  }
+  // For timed events, keep the time as provided
+
+  return date;
+};
+
 // Helper function to normalize dates to midnight UTC
 const normalizeDate = (dateString) => {
   const date = new Date(dateString);
@@ -138,7 +151,7 @@ exports.createEvent = asyncHandler(async (req, res, next) => {
   req.body.createdBy = req.user.id;
 
   // Validate required fields
-  const { title, header, body, startDate, endDate } = req.body;
+  const { title, header, body, startDate, endDate, isAllDay = true } = req.body;
 
   if (!title || !header || !body || !startDate || !endDate) {
     return next(
@@ -149,14 +162,15 @@ exports.createEvent = asyncHandler(async (req, res, next) => {
     );
   }
 
-  // Normalize dates to remove time component
-  const start = normalizeDate(startDate);
-  const end = normalizeDate(endDate);
+  // Normalize dates based on isAllDay flag
+  const start = normalizeDateForEvent(startDate, isAllDay);
+  const end = normalizeDateForEvent(endDate, isAllDay);
 
   // Debug logging
   console.log("Create Event - Date Validation:");
   console.log("Request startDate:", startDate);
   console.log("Request endDate:", endDate);
+  console.log("Is All Day:", isAllDay);
   console.log("Normalized startDate:", start);
   console.log("Normalized endDate:", end);
 
@@ -165,11 +179,11 @@ exports.createEvent = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse("Invalid date format provided", 400));
   }
 
-  // Allow same day events - only check if start is after end
+  // Check if start is after end
   if (start > end) {
     return next(
       new ErrorResponse(
-        `Start date must be before or on the same day as end date`,
+        `Start date/time must be before or at the same time as end date/time`,
         400
       )
     );
@@ -178,6 +192,7 @@ exports.createEvent = asyncHandler(async (req, res, next) => {
   // Update request body with normalized dates
   req.body.startDate = start;
   req.body.endDate = end;
+  req.body.isAllDay = isAllDay;
 
   // Create event
   const event = await Event.create(req.body);
@@ -212,20 +227,25 @@ exports.updateEvent = asyncHandler(async (req, res, next) => {
     );
   }
 
+  // Get isAllDay flag (use updated value if provided, otherwise use existing)
+  const isAllDay =
+    req.body.isAllDay !== undefined ? req.body.isAllDay : event.isAllDay;
+
   // Validate dates if they are being updated
   if (req.body.startDate || req.body.endDate) {
-    // Normalize dates
+    // Normalize dates based on isAllDay flag
     const startDate = req.body.startDate
-      ? normalizeDate(req.body.startDate)
-      : normalizeDate(event.startDate);
+      ? normalizeDateForEvent(req.body.startDate, isAllDay)
+      : event.startDate;
     const endDate = req.body.endDate
-      ? normalizeDate(req.body.endDate)
-      : normalizeDate(event.endDate);
+      ? normalizeDateForEvent(req.body.endDate, isAllDay)
+      : event.endDate;
 
     // Debug logging
     console.log("Update Event - Date Validation:");
     console.log("Request startDate:", req.body.startDate);
     console.log("Request endDate:", req.body.endDate);
+    console.log("Is All Day:", isAllDay);
     console.log("Normalized startDate:", startDate);
     console.log("Normalized endDate:", endDate);
 
@@ -234,11 +254,11 @@ exports.updateEvent = asyncHandler(async (req, res, next) => {
       return next(new ErrorResponse("Invalid date format provided", 400));
     }
 
-    // Allow same day events - only check if start is after end
+    // Check if start is after end
     if (startDate > endDate) {
       return next(
         new ErrorResponse(
-          `Start date must be before or on the same day as end date`,
+          `Start date/time must be before or at the same time as end date/time`,
           400
         )
       );
@@ -247,6 +267,11 @@ exports.updateEvent = asyncHandler(async (req, res, next) => {
     // Update request body with normalized dates
     if (req.body.startDate) req.body.startDate = startDate;
     if (req.body.endDate) req.body.endDate = endDate;
+  }
+
+  // Update isAllDay if provided
+  if (req.body.isAllDay !== undefined) {
+    req.body.isAllDay = isAllDay;
   }
 
   // Update event

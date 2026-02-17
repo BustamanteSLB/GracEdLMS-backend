@@ -15,7 +15,7 @@ const uploadFileToFirebase = async (
   fileBuffer,
   originalName,
   mimetype,
-  metadata = {}
+  metadata = {},
 ) => {
   try {
     // Create Firebase Storage path
@@ -48,7 +48,7 @@ const uploadFileToFirebase = async (
     const publicUrl = `https://storage.googleapis.com/${bucket.name}/${firebasePath}`;
 
     console.log(
-      `📎 File uploaded to Firebase: ${originalName} -> ${publicUrl}`
+      `📎 File uploaded to Firebase: ${originalName} -> ${publicUrl}`,
     );
     return publicUrl;
   } catch (error) {
@@ -69,7 +69,7 @@ const deleteFileFromFirebase = async (fileUrl) => {
     const pathIndex = urlParts.findIndex((part) => part === bucket.name);
     if (pathIndex !== -1 && urlParts[pathIndex + 1]) {
       const firebasePath = decodeURIComponent(
-        urlParts.slice(pathIndex + 1).join("/")
+        urlParts.slice(pathIndex + 1).join("/"),
       );
       const file = bucket.file(firebasePath);
       await file.delete();
@@ -120,8 +120,8 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         "Title, visibleDate, deadline, and quarter are required",
-        400
-      )
+        400,
+      ),
     );
   }
 
@@ -134,8 +134,8 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         "Not authorized to create activities for this subject",
-        403
-      )
+        403,
+      ),
     );
   }
 
@@ -163,7 +163,7 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
           activityTitle: title,
           subjectId,
           uploadedBy: req.user.id,
-        }
+        },
       );
       activityData.attachmentPath = firebaseUrl;
       console.log("📎 Activity attachment uploaded to Firebase:", firebaseUrl);
@@ -177,7 +177,7 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
 
   await activity.populate(
     "createdBy",
-    "firstName middleName lastName email profilePicture"
+    "firstName middleName lastName email profilePicture",
   );
 
   await Subject.findByIdAndUpdate(subjectId, {
@@ -205,26 +205,37 @@ exports.getActivitiesForSubject = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse(`Invalid subject ID: ${subjectId}`, 400));
   }
 
-  const subject = await Subject.findById(subjectId);
+  const subject =
+    await Subject.findById(subjectId).populate("teachers.teacher");
   if (!subject) {
     return next(new ErrorResponse(`Subject not found: ${subjectId}`, 404));
   }
 
+  // Check if user is enrolled student, assigned teacher, or admin
   const isEnrolledStudent =
     req.user.role === "Student" &&
     subject.students.some((s) => s.equals(req.user.id));
+
+  // Updated: Check if teacher is in the teachers array
   const isAssignedTeacher =
     req.user.role === "Teacher" &&
-    subject.teacher &&
-    subject.teacher.equals(req.user.id);
+    subject.teachers &&
+    subject.teachers.some(
+      (ta) =>
+        ta.teacher &&
+        (ta.teacher._id.equals(req.user.id) ||
+          ta.teacher.email === req.user.email ||
+          ta.teacher.username === req.user.username),
+    );
+
   const isAdmin = req.user.role === "Admin";
 
   if (!isEnrolledStudent && !isAssignedTeacher && !isAdmin) {
     return next(
       new ErrorResponse(
         "Not authorized to view activities for this subject",
-        403
-      )
+        403,
+      ),
     );
   }
 
@@ -256,7 +267,11 @@ exports.getActivity = asyncHandler(async (req, res, next) => {
   const activity = await Activity.findById(activityId)
     .populate({
       path: "subject",
-      select: "students teacher",
+      select: "students teachers",
+      populate: {
+        path: "teachers.teacher",
+        select: "firstName lastName email username _id",
+      },
     })
     .populate("createdBy", "firstName middleName lastName email profilePicture")
     .populate({
@@ -272,10 +287,19 @@ exports.getActivity = asyncHandler(async (req, res, next) => {
   const isEnrolledStudent =
     req.user.role === "Student" &&
     subject.students.some((s) => s.equals(req.user.id));
+
+  // Updated: Check if teacher is in the teachers array
   const isAssignedTeacher =
     req.user.role === "Teacher" &&
-    subject.teacher &&
-    subject.teacher.equals(req.user.id);
+    subject.teachers &&
+    subject.teachers.some(
+      (ta) =>
+        ta.teacher &&
+        (ta.teacher._id.equals(req.user.id) ||
+          ta.teacher.email === req.user.email ||
+          ta.teacher.username === req.user.username),
+    );
+
   const isAdmin = req.user.role === "Admin";
 
   if (!isEnrolledStudent && !isAssignedTeacher && !isAdmin) {
@@ -306,22 +330,39 @@ exports.updateActivity = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse(`Invalid activity ID: ${activityId}`, 400));
   }
 
-  let activity = await Activity.findById(activityId).populate(
-    "subject",
-    "teacher"
-  );
+  let activity = await Activity.findById(activityId).populate({
+    path: "subject",
+    select: "teachers",
+    populate: {
+      path: "teachers.teacher",
+      select: "_id email username",
+    },
+  });
+
   if (!activity) {
     return next(new ErrorResponse(`Activity not found: ${activityId}`, 404));
   }
 
-  if (
-    !(
-      req.user.role === "Admin" ||
-      (req.user.role === "Teacher" && activity.createdBy.equals(req.user.id))
-    )
-  ) {
+  // Updated: Check if user is admin or the teacher who created this activity
+  const isAdmin = req.user.role === "Admin";
+  const isCreator = activity.createdBy.equals(req.user.id);
+
+  // Also check if teacher is assigned to the subject
+  const subject = activity.subject;
+  const isAssignedTeacher =
+    req.user.role === "Teacher" &&
+    subject.teachers &&
+    subject.teachers.some(
+      (ta) =>
+        ta.teacher &&
+        (ta.teacher._id.equals(req.user.id) ||
+          ta.teacher.email === req.user.email ||
+          ta.teacher.username === req.user.username),
+    );
+
+  if (!isAdmin && !(isCreator && isAssignedTeacher)) {
     return next(
-      new ErrorResponse(`Not authorized to update this activity`, 403)
+      new ErrorResponse(`Not authorized to update this activity`, 403),
     );
   }
 
@@ -353,7 +394,7 @@ exports.updateActivity = asyncHandler(async (req, res, next) => {
           activityId: activity._id.toString(),
           activityTitle: title || activity.title,
           updatedBy: req.user.id,
-        }
+        },
       );
       updateFields.attachmentPath = firebaseUrl;
       console.log("📎 Updated activity attachment in Firebase:", firebaseUrl);
@@ -371,7 +412,7 @@ exports.updateActivity = asyncHandler(async (req, res, next) => {
   const updatedActivity = await Activity.findByIdAndUpdate(
     activityId,
     updateFields,
-    { new: true, runValidators: true }
+    { new: true, runValidators: true },
   ).populate("createdBy", "firstName middleName lastName email profilePicture");
 
   res.status(200).json({
@@ -387,20 +428,38 @@ exports.deleteActivity = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse(`Invalid activity ID: ${activityId}`, 400));
   }
 
-  const activity = await Activity.findById(activityId).populate(
-    "subject",
-    "teacher"
-  );
+  const activity = await Activity.findById(activityId).populate({
+    path: "subject",
+    select: "teachers",
+    populate: {
+      path: "teachers.teacher",
+      select: "_id email username",
+    },
+  });
+
   if (!activity) {
     return next(new ErrorResponse(`Activity not found: ${activityId}`, 404));
   }
 
-  if (
+  // Updated: Check authorization with new teachers array structure
+  const isAdmin = req.user.role === "Admin";
+  const isCreator = activity.createdBy.equals(req.user.id);
+
+  const subject = activity.subject;
+  const isAssignedTeacher =
     req.user.role === "Teacher" &&
-    (!activity.subject.teacher || !activity.subject.teacher.equals(req.user.id))
-  ) {
+    subject.teachers &&
+    subject.teachers.some(
+      (ta) =>
+        ta.teacher &&
+        (ta.teacher._id.equals(req.user.id) ||
+          ta.teacher.email === req.user.email ||
+          ta.teacher.username === req.user.username),
+    );
+
+  if (!isAdmin && !(isCreator && isAssignedTeacher)) {
     return next(
-      new ErrorResponse("Not authorized to delete this activity", 403)
+      new ErrorResponse("Not authorized to delete this activity", 403),
     );
   }
 
@@ -460,8 +519,8 @@ exports.turnInActivity = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         "Late submissions are not allowed for this activity",
-        400
-      )
+        400,
+      ),
     );
   }
 
@@ -479,12 +538,12 @@ exports.turnInActivity = asyncHandler(async (req, res, next) => {
             activityTitle: activity.title,
             studentId,
             submissionType: "student-submission",
-          }
+          },
         );
         attachmentPaths.push(firebaseUrl);
       }
       console.log(
-        `📎 Uploaded ${attachmentPaths.length} submission files to Firebase`
+        `📎 Uploaded ${attachmentPaths.length} submission files to Firebase`,
       );
     } catch (uploadError) {
       console.error("Error uploading submission files:", uploadError);
@@ -493,7 +552,7 @@ exports.turnInActivity = asyncHandler(async (req, res, next) => {
   }
 
   let submission = activity.submissions.find((sub) =>
-    sub.student.equals(studentId)
+    sub.student.equals(studentId),
   );
 
   if (submission) {
@@ -523,7 +582,7 @@ exports.turnInActivity = asyncHandler(async (req, res, next) => {
     success: true,
     message: "Activity turned in successfully",
     submission: activity.submissions.find((sub) =>
-      sub.student.equals(studentId)
+      sub.student.equals(studentId),
     ),
   });
 });
@@ -545,7 +604,7 @@ exports.undoTurnInActivity = asyncHandler(async (req, res, next) => {
 
   if (req.user.role !== "Student") {
     return next(
-      new ErrorResponse("Only students can undo activity turn-in", 403)
+      new ErrorResponse("Only students can undo activity turn-in", 403),
     );
   }
 
@@ -554,13 +613,13 @@ exports.undoTurnInActivity = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         "Cannot undo turn-in when late submissions are not allowed",
-        400
-      )
+        400,
+      ),
     );
   }
 
   const submissionIndex = activity.submissions.findIndex((sub) =>
-    sub.student.equals(studentId)
+    sub.student.equals(studentId),
   );
 
   if (submissionIndex === -1) {
@@ -601,24 +660,40 @@ exports.getAllSubmissionsForActivity = asyncHandler(async (req, res, next) => {
       path: "submissions.student",
       select: "firstName middleName lastName email profilePicture",
     })
-    .populate("subject", "teacher");
+    .populate({
+      path: "subject",
+      select: "teachers",
+      populate: {
+        path: "teachers.teacher",
+        select: "_id email username",
+      },
+    });
 
   if (!activity) {
     return next(new ErrorResponse(`Activity not found: ${activityId}`, 404));
   }
 
+  // Updated: Check if teacher is in the teachers array
+  const subject = activity.subject;
   const isAssignedTeacher =
     req.user.role === "Teacher" &&
-    activity.subject.teacher &&
-    activity.subject.teacher.equals(req.user.id);
+    subject.teachers &&
+    subject.teachers.some(
+      (ta) =>
+        ta.teacher &&
+        (ta.teacher._id.equals(req.user.id) ||
+          ta.teacher.email === req.user.email ||
+          ta.teacher.username === req.user.username),
+    );
+
   const isAdmin = req.user.role === "Admin";
 
   if (!isAssignedTeacher && !isAdmin) {
     return next(
       new ErrorResponse(
         "Not authorized to view submissions for this activity",
-        403
-      )
+        403,
+      ),
     );
   }
 

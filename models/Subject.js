@@ -1,66 +1,97 @@
 // Subject.js
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
-const subjectSchema = new mongoose.Schema({
-  subjectName: { type: String, required: true, trim: true },
-  description: { type: String, trim: true },
-  gradeLevel: { type: String, trim: true }, // Added gradeLevel
-  schoolYear: { type: String, trim: true }, // Added schoolYear e.g., "2023 - 2024"
-  section: { type: String, trim: true },    // Added section
-  teacher: { // The assigned teacher
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User', // Reference the base User model, but ensure it's a Teacher role via logic
-    // Consider adding validation to ensure the referenced user has the 'Teacher' role
-    default: null
+const subjectSchema = new mongoose.Schema(
+  {
+    subjectName: { type: String, required: true, trim: true },
+    description: { type: String, trim: true },
+    gradeLevel: { type: String, trim: true },
+    schoolYear: { type: String, trim: true },
+    section: { type: String, trim: true },
+    subjectImage: { type: String, default: null },
+
+    // Updated teacher assignment with quarters
+    teachers: [
+      {
+        teacher: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        quarters: {
+          firstQuarter: { type: Boolean, default: false },
+          secondQuarter: { type: Boolean, default: false },
+          thirdQuarter: { type: Boolean, default: false },
+          fourthQuarter: { type: Boolean, default: false },
+        },
+        isAssignedToAllQuarters: { type: Boolean, default: false },
+        assignedAt: { type: Date, default: Date.now },
+      },
+    ],
+
+    students: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    activities: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Activity",
+      },
+    ],
+    discussions: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Discussion",
+      },
+    ],
+    announcements: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Announcement",
+      },
+    ],
+    courseMaterials: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "CourseMaterial",
+      },
+    ],
+
+    // Archive fields
+    isArchived: {
+      type: Boolean,
+      default: false,
+    },
+    archivedAt: {
+      type: Date,
+      default: null,
+    },
+    archivedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
   },
-  students: [{ // Students enrolled
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User' // Reference base User, ensure 'Student' role via logic
-  }],
-  activities: [{ // Activities within the subject
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Activity'
-  }],
-  discussions: [{ // Discussions related to the subject
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Discussion'
-  }],
-  announcements: [{ // Announcements for the subject
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Announcement'
-  }],
-  courseMaterials: [{ // Course materials uploaded
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'CourseMaterial'
-  }],
-  // Archive fields
-  isArchived: { 
-    type: Boolean, 
-    default: false 
-  },
-  archivedAt: { 
-    type: Date, 
-    default: null 
-  },
-  archivedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    default: null
-  }
-}, { timestamps: true });
+  { timestamps: true },
+);
 
 // Add compound index for uniqueness based on subjectName, gradeLevel, section, and schoolYear
-// Only apply uniqueness to non-archived subjects
-subjectSchema.index({ 
-  subjectName: 1, 
-  gradeLevel: 1, 
-  section: 1, 
-  schoolYear: 1,
-  isArchived: 1 
-}, { 
-  unique: true,
-  partialFilterExpression: { isArchived: false }
-});
+subjectSchema.index(
+  {
+    subjectName: 1,
+    gradeLevel: 1,
+    section: 1,
+    schoolYear: 1,
+    isArchived: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: { isArchived: false },
+  },
+);
 
-const Subject = mongoose.model('Subject', subjectSchema);
+const Subject = mongoose.model("Subject", subjectSchema);
 module.exports = Subject;

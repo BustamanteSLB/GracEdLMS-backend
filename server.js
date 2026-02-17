@@ -23,6 +23,7 @@ const subjectRoutes       = require("./routes/subjectRoutes");
 const courseMaterialRoutes = require("./routes/courseMaterialRoutes"); // Add this line
 const eventRoutes        = require("./routes/eventRoutes");
 const quizRoutes         = require("./routes/quizRoutes");
+const sectionRoutes = require("./routes/sectionRoutes");
 const teacherRoutes      = require("./routes/teacherRoutes");
 const studentRoutes      = require("./routes/studentRoutes");
 const schoolRoutes       = require("./routes/schoolRoutes");
@@ -70,6 +71,7 @@ app.use("/api/v1/subjects", subjectRoutes);
 app.use("/api/v1", courseMaterialRoutes); // Add this line
 app.use("/api/v1/events", eventRoutes);
 app.use("/api/v1/quizzes", quizRoutes);
+app.use("/api/v1/sections", sectionRoutes);
 app.use("/api/v1/teachers", teacherRoutes);
 app.use("/api/v1/students", studentRoutes);
 app.use("/api/v1/school", schoolRoutes);

@@ -8,9 +8,11 @@ const {
   addCommentToDiscussion,
   updateCommentInDiscussion,
   deleteCommentFromDiscussion,
+  toggleHideComment,
   addReplyToComment,
   updateReplyInComment,
   deleteReplyFromComment,
+  toggleHideReply,
 } = require("../controllers/discussionController");
 const { protect, authorize } = require("../middleware/authMiddleware");
 
@@ -44,6 +46,11 @@ router
     deleteCommentFromDiscussion
   );
 
+// Hide/Unhide comment (Admin only)
+router
+  .route("/discussions/:discussionId/comments/:commentId/hide")
+  .patch(authorize("Admin"), toggleHideComment);
+
 // Replies to comments
 router
   .route("/discussions/:discussionId/comments/:commentId/replies")
@@ -53,5 +60,10 @@ router
   .route("/discussions/:discussionId/comments/:commentId/replies/:replyId")
   .put(authorize("Admin", "Teacher", "Student"), updateReplyInComment)
   .delete(authorize("Admin", "Teacher", "Student"), deleteReplyFromComment);
+
+// Hide/Unhide reply (Admin only)
+router
+  .route("/discussions/:discussionId/comments/:commentId/replies/:replyId/hide")
+  .patch(authorize("Admin"), toggleHideReply);
 
 module.exports = router;

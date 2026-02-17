@@ -1,4 +1,4 @@
-const express = require('express');
+const express = require("express");
 const {
   createSubject,
   getAllSubjects,
@@ -12,32 +12,56 @@ const {
   enrollStudent,
   unenrollStudent,
   bulkEnrollStudents,
-} = require('../controllers/subjectController');
-const { protect, authorize } = require('../middleware/authMiddleware');
+  uploadSubjectImage,
+  deleteSubjectImage,
+} = require("../controllers/subjectController");
+const { protect, authorize } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
 router.use(protect);
 
 router
-  .route('/')
-  .post(authorize('Admin', 'Teacher'), createSubject)
+  .route("/")
+  .post(authorize("Admin", "Teacher"), createSubject)
   .get(getAllSubjects);
 
 router
-  .route('/:id')
+  .route("/:id")
   .get(getSubject)
-  .put(authorize('Admin', 'Teacher'), updateSubject)
-  .delete(authorize('Admin', 'Teacher'), deleteSubject);
+  .put(authorize("Admin", "Teacher"), updateSubject)
+  .delete(authorize("Admin", "Teacher"), deleteSubject);
 
 // Archive management routes
-router.put('/:id/restore', authorize('Admin'), restoreSubject);
-router.delete('/:id/permanent', authorize('Admin'), permanentDeleteSubject);
+router.put("/:id/restore", authorize("Admin"), restoreSubject);
+router.delete("/:id/permanent", authorize("Admin"), permanentDeleteSubject);
 
-router.put('/:subjectId/assign-teacher', authorize('Admin'), assignTeacher);
-router.put('/:subjectId/unassign-teacher', authorize('Admin'), unassignTeacher);
-router.put('/:subjectId/enroll-student', authorize('Admin', 'Teacher'), enrollStudent);
-router.put('/:subjectId/unenroll-student/:studentIdentifier', authorize('Admin', 'Teacher', 'Student'), unenrollStudent);
-router.put('/:subjectId/bulk-enroll-students', authorize('Admin', 'Teacher'), bulkEnrollStudents);
+router.put("/:subjectId/assign-teacher", authorize("Admin"), assignTeacher);
+router.put("/:subjectId/unassign-teacher", authorize("Admin"), unassignTeacher);
+router.put(
+  "/:subjectId/enroll-student",
+  authorize("Admin", "Teacher"),
+  enrollStudent
+);
+router.put(
+  "/:subjectId/unenroll-student/:studentIdentifier",
+  authorize("Admin", "Teacher", "Student"),
+  unenrollStudent
+);
+router.put(
+  "/:subjectId/bulk-enroll-students",
+  authorize("Admin", "Teacher"),
+  bulkEnrollStudents
+);
+router.put(
+  "/:id/upload-image",
+  authorize("Admin", "Teacher"),
+  uploadSubjectImage
+);
+router.delete(
+  "/:id/delete-image",
+  authorize("Admin", "Teacher"),
+  deleteSubjectImage
+);
 
 module.exports = router;

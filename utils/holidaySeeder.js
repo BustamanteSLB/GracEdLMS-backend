@@ -181,7 +181,7 @@ async function generateHolidayEventsForYear(year) {
     const createdEvents = [];
 
     for (const holiday of holidays) {
-      // Create date at midnight UTC (date only, no time)
+      // Create date at midnight UTC (all-day event)
       const eventDate = new Date(
         Date.UTC(year, holiday.month - 1, holiday.day, 0, 0, 0, 0)
       );
@@ -202,6 +202,7 @@ async function generateHolidayEventsForYear(year) {
           body: getHolidayBodyMessage(holiday.name),
           startDate: eventDate,
           endDate: eventDate, // Same day event
+          isAllDay: true, // NEW - Mark as all-day event
           priority: holiday.type === "regular" ? "high" : "medium",
           targetAudience: "all",
           eventType: "holiday",

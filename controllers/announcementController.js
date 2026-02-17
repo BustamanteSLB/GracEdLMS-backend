@@ -5,6 +5,17 @@ const Subject = require("../models/Subject");
 const asyncHandler = require("../utils/asyncHandler");
 const { ErrorResponse } = require("../utils/errorResponse");
 
+// Helper function to check if user is assigned teacher
+const isAssignedTeacher = (subject, userId) => {
+  if (!subject.teachers || !Array.isArray(subject.teachers)) {
+    return false;
+  }
+  return subject.teachers.some((ta) => {
+    const teacherId = ta.teacher?._id || ta.teacher;
+    return teacherId && teacherId.toString() === userId.toString();
+  });
+};
+
 // ────────────────────────────────────────────────────────────────────────────────
 // @desc    Create a new announcement for a subject
 // @route   POST /api/v1/subjects/:subjectId/announcements
@@ -17,33 +28,40 @@ exports.createAnnouncement = asyncHandler(async (req, res, next) => {
   // 1) Validate subjectId
   if (!mongoose.Types.ObjectId.isValid(subjectId)) {
     return next(
-      new ErrorResponse(`Invalid subject ID format: ${subjectId}`, 400)
+      new ErrorResponse(`Invalid subject ID format: ${subjectId}`, 400),
     );
   }
   if (!title || !content) {
     return next(
       new ErrorResponse(
         "Title and content are required for an announcement",
-        400
-      )
+        400,
+      ),
     );
   }
 
-  // 2) Make sure the subject actually exists
-  const subject = await Subject.findById(subjectId);
+  // 2) Make sure the subject actually exists - populate teachers
+  const subject = await Subject.findById(subjectId).populate({
+    path: "teachers.teacher",
+    select: "_id email username",
+  });
+
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404),
     );
   }
 
-  // 3) Authorization check (Teacher or Admin only)
-  if (!(req.user.role === "Teacher" || req.user.role === "Admin")) {
+  // 3) Authorization check (assigned Teacher or Admin only)
+  const isTeacherAssigned = isAssignedTeacher(subject, req.user.id);
+  const isAdmin = req.user.role === "Admin";
+
+  if (!isTeacherAssigned && !isAdmin) {
     return next(
       new ErrorResponse(
         "You are not authorized to create announcements for this subject.",
-        403
-      )
+        403,
+      ),
     );
   }
 
@@ -55,9 +73,7 @@ exports.createAnnouncement = asyncHandler(async (req, res, next) => {
     createdBy: req.user.id,
   });
 
-  // 5) Ensure that the subject schema actually has an "announcements" array
-  //    and push the new announcement's _id into it.
-  //    If your Subject model uses a different field name, adjust accordingly.
+  // 5) Add to subject's announcements array
   await Subject.findByIdAndUpdate(subjectId, {
     $addToSet: { announcements: announcement._id },
   });
@@ -90,14 +106,18 @@ exports.getAnnouncementsForSubject = asyncHandler(async (req, res, next) => {
   const { subjectId } = req.params;
   if (!mongoose.Types.ObjectId.isValid(subjectId)) {
     return next(
-      new ErrorResponse(`Invalid subject ID format: ${subjectId}`, 400)
+      new ErrorResponse(`Invalid subject ID format: ${subjectId}`, 400),
     );
   }
 
-  const subject = await Subject.findById(subjectId);
+  const subject = await Subject.findById(subjectId).populate({
+    path: "teachers.teacher",
+    select: "_id email username",
+  });
+
   if (!subject) {
     return next(
-      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404)
+      new ErrorResponse(`Subject not found with ID ${subjectId}`, 404),
     );
   }
 
@@ -105,18 +125,16 @@ exports.getAnnouncementsForSubject = asyncHandler(async (req, res, next) => {
   const isEnrolledStudent =
     req.user.role === "Student" &&
     subject.students.some((s) => s.equals(req.user.id));
-  const isAssignedTeacher =
-    req.user.role === "Teacher" &&
-    subject.teacher &&
-    subject.teacher.equals(req.user.id);
+
+  const isTeacherAssigned = isAssignedTeacher(subject, req.user.id);
   const isAdmin = req.user.role === "Admin";
 
-  if (!isEnrolledStudent && !isAssignedTeacher && !isAdmin) {
+  if (!isEnrolledStudent && !isTeacherAssigned && !isAdmin) {
     return next(
       new ErrorResponse(
         "You are not authorized to view announcements for this subject.",
-        403
-      )
+        403,
+      ),
     );
   }
 
@@ -152,18 +170,18 @@ exports.getAnnouncement = asyncHandler(async (req, res, next) => {
   const { id } = req.params;
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return next(
-      new ErrorResponse(`Invalid announcement ID format: ${id}`, 400)
+      new ErrorResponse(`Invalid announcement ID format: ${id}`, 400),
     );
   }
 
-  // Populate subject → teacher/students, plus createdBy
+  // Populate subject with teachers array
   let announcement = await Announcement.findById(id)
     .populate({
       path: "subject",
-      select: "subjectCode subjectName description teacher students",
+      select: "subjectCode subjectName description teachers students",
       populate: {
-        path: "teacher students",
-        select: "firstName lastName username userId role",
+        path: "teachers.teacher students",
+        select: "firstName lastName username userId role email",
       },
     })
     .populate({
@@ -181,18 +199,16 @@ exports.getAnnouncement = asyncHandler(async (req, res, next) => {
   const isEnrolledStudent =
     req.user.role === "Student" &&
     subjectDoc.students.some((s) => s.equals(req.user.id));
-  const isAssignedTeacher =
-    req.user.role === "Teacher" &&
-    subjectDoc.teacher &&
-    subjectDoc.teacher.equals(req.user.id);
+
+  const isTeacherAssigned = isAssignedTeacher(subjectDoc, req.user.id);
   const isAdmin = req.user.role === "Admin";
 
-  if (!isEnrolledStudent && !isAssignedTeacher && !isAdmin) {
+  if (!isEnrolledStudent && !isTeacherAssigned && !isAdmin) {
     return next(
       new ErrorResponse(
         "You are not authorized to view this announcement.",
-        403
-      )
+        403,
+      ),
     );
   }
 
@@ -218,32 +234,38 @@ exports.updateAnnouncement = asyncHandler(async (req, res, next) => {
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return next(
-      new ErrorResponse(`Invalid announcement ID format: ${id}`, 400)
+      new ErrorResponse(`Invalid announcement ID format: ${id}`, 400),
     );
   }
 
-  // Fetch the existing announcement + its subject→teacher
-  let announcement = await Announcement.findById(id).populate(
-    "subject",
-    "teacher"
-  );
+  // Fetch the existing announcement + its subject with teachers
+  let announcement = await Announcement.findById(id).populate({
+    path: "subject",
+    select: "teachers",
+    populate: {
+      path: "teachers.teacher",
+      select: "_id email username",
+    },
+  });
+
   if (!announcement) {
     return next(new ErrorResponse(`Announcement not found with ID ${id}`, 404));
   }
 
-  // Authorization: Only the creator, the subject's assigned teacher, or Admin may update
+  // Authorization: Only the creator, assigned teacher, or Admin may update
   const isCreator = announcement.createdBy.equals(req.user.id);
-  const isAssignedTeacher =
-    announcement.subject.teacher &&
-    announcement.subject.teacher.equals(req.user.id);
+  const isTeacherAssigned = isAssignedTeacher(
+    announcement.subject,
+    req.user.id,
+  );
   const isAdmin = req.user.role === "Admin";
 
-  if (!isCreator && !isAssignedTeacher && !isAdmin) {
+  if (!isCreator && !isTeacherAssigned && !isAdmin) {
     return next(
       new ErrorResponse(
         "You are not authorized to update this announcement.",
-        403
-      )
+        403,
+      ),
     );
   }
 
@@ -257,7 +279,7 @@ exports.updateAnnouncement = asyncHandler(async (req, res, next) => {
     {
       new: true,
       runValidators: true,
-    }
+    },
   ).populate({
     path: "createdBy",
     select:
@@ -284,32 +306,38 @@ exports.deleteAnnouncement = asyncHandler(async (req, res, next) => {
   const { id } = req.params;
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return next(
-      new ErrorResponse(`Invalid announcement ID format: ${id}`, 400)
+      new ErrorResponse(`Invalid announcement ID format: ${id}`, 400),
     );
   }
 
-  // Fetch the announcement + its subject→teacher
-  const announcement = await Announcement.findById(id).populate(
-    "subject",
-    "teacher"
-  );
+  // Fetch the announcement + its subject with teachers
+  const announcement = await Announcement.findById(id).populate({
+    path: "subject",
+    select: "teachers",
+    populate: {
+      path: "teachers.teacher",
+      select: "_id email username",
+    },
+  });
+
   if (!announcement) {
     return next(new ErrorResponse(`Announcement not found with ID ${id}`, 404));
   }
 
-  // Authorization: Only the creator, the subject's assigned teacher, or Admin may delete
+  // Authorization: Only the creator, assigned teacher, or Admin may delete
   const isCreator = announcement.createdBy.equals(req.user.id);
-  const isAssignedTeacher =
-    announcement.subject.teacher &&
-    announcement.subject.teacher.equals(req.user.id);
+  const isTeacherAssigned = isAssignedTeacher(
+    announcement.subject,
+    req.user.id,
+  );
   const isAdmin = req.user.role === "Admin";
 
-  if (!isCreator && !isAssignedTeacher && !isAdmin) {
+  if (!isCreator && !isTeacherAssigned && !isAdmin) {
     return next(
       new ErrorResponse(
         "You are not authorized to delete this announcement.",
-        403
-      )
+        403,
+      ),
     );
   }
 

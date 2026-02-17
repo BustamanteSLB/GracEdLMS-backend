@@ -41,7 +41,7 @@ const extractTextFromBuffer = async (buffer, mimetype) => {
       // officeparser requires a file path, so we need to write the buffer to a temp file
       const tempFilePath = path.join(
         os.tmpdir(),
-        `temp-${Date.now()}-${Math.random().toString(36).substring(7)}.pptx`
+        `temp-${Date.now()}-${Math.random().toString(36).substring(7)}.pptx`,
       );
 
       try {
@@ -108,21 +108,26 @@ Requirements:
 
 For each question, provide:
 1. Question text
-2. Question type (multiple_choice, true_false, or multiple_answers)
-3. Options (for multiple choice questions)
+2. Question type (multiple_choice, true_false, multiple_answers, short_answer, or essay)
+3. Options (for multiple choice questions, not for short_answer or essay)
 4. Correct answer(s)
-5. Points (1-5 based on difficulty)
+5. For short_answer: provide correctAnswers array, caseSensitive boolean, and markOthersIncorrect boolean
+6. For essay: no options or correct answers needed (will be manually graded)
+7. Points (1-5 based on difficulty, essay questions typically worth more points)
 
 Format the response as a valid JSON object with this structure:
 {
   "questions": [
     {
       "text": "Question text here",
-      "type": "multiple_choice|true_false|multiple_answers",
+      "type": "multiple_choice|true_false|multiple_answers|short_answer|essay",
       "options": [
         {"text": "Option 1", "isCorrect": false},
         {"text": "Option 2", "isCorrect": true}
       ],
+      "correctAnswers": ["answer1", "answer2"], // For short_answer only
+      "caseSensitive": false, // For short_answer only
+      "markOthersIncorrect": true, // For short_answer only
       "itemPoints": 1,
       "isRequired": true,
       "answer": "correct answer text or array for multiple answers"
@@ -134,6 +139,10 @@ Important rules:
 - For true_false questions, use exactly two options: "True" and "False"
 - For multiple_choice questions, provide 4 options with only one correct
 - For multiple_answers questions, provide 4-5 options with multiple correct answers
+- For short_answer questions, provide correctAnswers array with acceptable answers (2-3 variations)
+- For essay questions, DO NOT provide options or correctAnswers (these are manually graded)
+- Essay questions should be open-ended and thought-provoking
+- Essay questions should typically be worth 3-5 points
 - Ensure questions are relevant to the content provided
 - Make questions challenging but fair
 - Vary the difficulty and question types
@@ -191,14 +200,14 @@ Important rules:
       console.error("JSON Parse Error:", parseError);
       console.error("Failed to parse:", aiResponse);
       throw new Error(
-        `Failed to parse AI response as JSON: ${parseError.message}`
+        `Failed to parse AI response as JSON: ${parseError.message}`,
       );
     }
 
     // Validate and clean the response
     if (!quizData.questions || !Array.isArray(quizData.questions)) {
       throw new Error(
-        "Invalid AI response format: missing or invalid 'questions' array"
+        "Invalid AI response format: missing or invalid 'questions' array",
       );
     }
 
@@ -207,7 +216,7 @@ Important rules:
     }
 
     console.log(
-      `Successfully parsed ${quizData.questions.length} questions from AI response`
+      `Successfully parsed ${quizData.questions.length} questions from AI response`,
     );
 
     // Validate each question
@@ -218,14 +227,61 @@ Important rules:
 
       if (
         !q.type ||
-        !["multiple_choice", "true_false", "multiple_answers"].includes(q.type)
+        ![
+          "multiple_choice",
+          "true_false",
+          "multiple_answers",
+          "short_answer",
+          "essay",
+        ].includes(q.type)
       ) {
         throw new Error(`Question ${index + 1} has invalid type: ${q.type}`);
       }
 
+      // Essay questions don't need options or correct answers
+      if (q.type === "essay") {
+        return {
+          text: q.text,
+          type: q.type,
+          options: [], // No options for essay
+          correctAnswers: [], // No correct answers for essay
+          itemPoints: q.itemPoints || 3, // Essay questions worth more points by default
+          isRequired: q.isRequired !== undefined ? q.isRequired : true,
+          answer: "", // Empty answer for essay
+        };
+      }
+
+      // Short answer questions need correct answers
+      if (q.type === "short_answer") {
+        if (
+          !q.correctAnswers ||
+          !Array.isArray(q.correctAnswers) ||
+          q.correctAnswers.length === 0
+        ) {
+          throw new Error(
+            `Question ${index + 1} (short_answer) is missing correctAnswers array`,
+          );
+        }
+
+        return {
+          text: q.text,
+          type: q.type,
+          options: [], // No options for short answer
+          correctAnswers: q.correctAnswers,
+          caseSensitive:
+            q.caseSensitive !== undefined ? q.caseSensitive : false,
+          markOthersIncorrect:
+            q.markOthersIncorrect !== undefined ? q.markOthersIncorrect : true,
+          itemPoints: q.itemPoints || 1,
+          isRequired: q.isRequired !== undefined ? q.isRequired : true,
+          answer: "", // Empty answer for short answer
+        };
+      }
+
+      // Other question types need options
       if (!Array.isArray(q.options) || q.options.length < 2) {
         throw new Error(
-          `Question ${index + 1} has invalid or insufficient options`
+          `Question ${index + 1} has invalid or insufficient options`,
         );
       }
 
@@ -240,6 +296,7 @@ Important rules:
         text: q.text,
         type: q.type,
         options: q.options,
+        correctAnswers: [], // Not used for multiple choice
         itemPoints: q.itemPoints || 1,
         isRequired: q.isRequired !== undefined ? q.isRequired : true,
         answer: q.answer || "",
@@ -253,15 +310,15 @@ Important rules:
     // Provide more specific error messages
     if (error.message.includes("API key")) {
       throw new Error(
-        "OpenAI API key is invalid or missing. Please check your configuration."
+        "OpenAI API key is invalid or missing. Please check your configuration.",
       );
     } else if (error.message.includes("quota")) {
       throw new Error(
-        "OpenAI API quota exceeded. Please check your usage limits."
+        "OpenAI API quota exceeded. Please check your usage limits.",
       );
     } else if (error.message.includes("model")) {
       throw new Error(
-        `OpenAI model error: ${error.message}. The model may not be available.`
+        `OpenAI model error: ${error.message}. The model may not be available.`,
       );
     }
 
@@ -297,21 +354,21 @@ exports.generateAIQuiz = asyncHandler(async (req, res, next) => {
   try {
     console.log(
       "Processing uploaded file for AI quiz generation:",
-      req.file.originalname
+      req.file.originalname,
     );
 
     // Extract text from uploaded file buffer
     const extractedText = await extractTextFromBuffer(
       req.file.buffer,
-      req.file.mimetype
+      req.file.mimetype,
     );
 
     if (!extractedText || extractedText.trim().length < 100) {
       return next(
         new ErrorResponse(
           "File content is too short or empty to generate meaningful questions",
-          400
-        )
+          400,
+        ),
       );
     }
 
@@ -334,7 +391,7 @@ exports.generateAIQuiz = asyncHandler(async (req, res, next) => {
     // Calculate total quiz points
     const quizPoints = aiQuestions.reduce(
       (total, question) => total + (question.itemPoints || 1),
-      0
+      0,
     );
 
     // CHANGED: Only return the questions, don't create the quiz yet
@@ -355,7 +412,7 @@ exports.generateAIQuiz = asyncHandler(async (req, res, next) => {
   } catch (error) {
     console.error("Error in AI quiz generation:", error);
     return next(
-      new ErrorResponse(error.message || "Failed to generate AI quiz", 500)
+      new ErrorResponse(error.message || "Failed to generate AI quiz", 500),
     );
   }
 });
@@ -425,21 +482,25 @@ exports.createQuiz = asyncHandler(async (req, res, next) => {
       } catch (uploadError) {
         console.error(
           `Failed to upload image ${file.originalname}:`,
-          uploadError
+          uploadError,
         );
         // Continue with other files even if one fails
       }
     }
   }
 
-  // Parse questions and map images
+  // Parse questions and check for essay type
   let parsedQuestions = [];
+  let hasEssay = false;
   if (questions) {
     parsedQuestions = JSON.parse(questions).map((question) => {
       if (question.images && question.images.length > 0) {
         question.images = question.images.map(
-          (imageName) => imageMap[imageName] || imageName
+          (imageName) => imageMap[imageName] || imageName,
         );
+      }
+      if (question.type === "essay") {
+        hasEssay = true;
       }
       return question;
     });
@@ -448,7 +509,7 @@ exports.createQuiz = asyncHandler(async (req, res, next) => {
   // Calculate total quiz points
   const quizPoints = parsedQuestions.reduce(
     (total, question) => total + (question.itemPoints || 1),
-    0
+    0,
   );
 
   const quiz = await Quiz.create({
@@ -461,13 +522,14 @@ exports.createQuiz = asyncHandler(async (req, res, next) => {
     timeLimit: timeLimit ? parseInt(timeLimit) : null,
     quarter,
     quizPoints,
+    hasEssay,
     status: "draft",
   });
 
   await quiz.populate("createdBy", "firstName lastName email");
   await quiz.populate(
     "subject",
-    "subjectName description gradeLevel section schoolYear"
+    "subjectName description gradeLevel section schoolYear",
   );
 
   res.status(201).json({
@@ -549,20 +611,24 @@ exports.updateQuiz = asyncHandler(async (req, res, next) => {
       } catch (uploadError) {
         console.error(
           `Failed to upload image ${file.originalname}:`,
-          uploadError
+          uploadError,
         );
       }
     }
   }
 
-  // Parse questions and map images
+  // Parse questions and check for essay type
   let parsedQuestions = quiz.questions;
+  let hasEssay = false;
   if (questions) {
     parsedQuestions = JSON.parse(questions).map((question) => {
       if (question.images && question.images.length > 0) {
         question.images = question.images.map(
-          (imageName) => imageMap[imageName] || imageName
+          (imageName) => imageMap[imageName] || imageName,
         );
+      }
+      if (question.type === "essay") {
+        hasEssay = true;
       }
       return question;
     });
@@ -571,7 +637,7 @@ exports.updateQuiz = asyncHandler(async (req, res, next) => {
   // Calculate total quiz points
   const quizPoints = parsedQuestions.reduce(
     (total, question) => total + (question.itemPoints || 1),
-    0
+    0,
   );
 
   // Update quiz
@@ -589,15 +655,16 @@ exports.updateQuiz = asyncHandler(async (req, res, next) => {
       timeLimit: timeLimit ? parseInt(timeLimit) : quiz.timeLimit,
       quarter: quarter || quiz.quarter,
       quizPoints,
+      hasEssay,
       status: status || quiz.status,
     },
-    { new: true, runValidators: true }
+    { new: true, runValidators: true },
   );
 
   await quiz.populate("createdBy", "firstName lastName email");
   await quiz.populate(
     "subject",
-    "subjectName description gradeLevel section schoolYear"
+    "subjectName description gradeLevel section schoolYear",
   );
 
   res.status(200).json({
@@ -634,11 +701,11 @@ exports.deleteQuiz = asyncHandler(async (req, res, next) => {
             if (imageUrl.includes("storage.googleapis.com")) {
               const urlParts = imageUrl.split("/");
               const pathIndex = urlParts.findIndex(
-                (part) => part === bucket.name
+                (part) => part === bucket.name,
               );
               if (pathIndex !== -1 && urlParts[pathIndex + 1]) {
                 const firebasePath = decodeURIComponent(
-                  urlParts.slice(pathIndex + 1).join("/")
+                  urlParts.slice(pathIndex + 1).join("/"),
                 );
                 const file = bucket.file(firebasePath);
                 await file.delete();
@@ -699,7 +766,7 @@ exports.getQuizzes = asyncHandler(async (req, res, next) => {
     .populate("createdBy", "firstName lastName email")
     .populate(
       "subject",
-      "subjectName description gradeLevel section schoolYear"
+      "subjectName description gradeLevel section schoolYear",
     )
     .sort({ createdAt: -1 });
 
@@ -718,7 +785,7 @@ exports.getQuiz = asyncHandler(async (req, res, next) => {
     .populate("createdBy", "firstName lastName email")
     .populate(
       "subject",
-      "subjectName description gradeLevel section schoolYear"
+      "subjectName description gradeLevel section schoolYear",
     )
     .populate("quizSubmissions.student", "firstName lastName email");
 
@@ -760,7 +827,7 @@ exports.publishQuiz = asyncHandler(async (req, res, next) => {
 
   if (quiz.questions.length === 0) {
     return next(
-      new ErrorResponse("Cannot publish quiz without questions", 400)
+      new ErrorResponse("Cannot publish quiz without questions", 400),
     );
   }
 
@@ -816,7 +883,7 @@ exports.duplicateQuiz = asyncHandler(async (req, res, next) => {
     originalQuiz.createdBy.toString() !== req.user.id
   ) {
     return next(
-      new ErrorResponse("Not authorized to duplicate this quiz", 403)
+      new ErrorResponse("Not authorized to duplicate this quiz", 403),
     );
   }
 
@@ -836,7 +903,7 @@ exports.duplicateQuiz = asyncHandler(async (req, res, next) => {
   await duplicatedQuiz.populate("createdBy", "firstName lastName email");
   await duplicatedQuiz.populate(
     "subject",
-    "subjectName description gradeLevel section schoolYear"
+    "subjectName description gradeLevel section schoolYear",
   );
 
   res.status(201).json({
@@ -849,10 +916,9 @@ exports.duplicateQuiz = asyncHandler(async (req, res, next) => {
 // @route   GET /api/v1/quizzes/:id/submissions
 // @access  Private/Teacher,Admin
 exports.getQuizSubmissions = asyncHandler(async (req, res, next) => {
-  const quiz = await Quiz.findById(req.params.id).populate(
-    "quizSubmissions.student",
-    "firstName lastName email"
-  );
+  const quiz = await Quiz.findById(req.params.id)
+    .populate("quizSubmissions.student", "firstName lastName email userId")
+    .populate("questions");
 
   if (!quiz) {
     return next(new ErrorResponse("Quiz not found", 404));
@@ -866,9 +932,23 @@ exports.getQuizSubmissions = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse("Not authorized to view submissions", 403));
   }
 
+  // Only return submissions that have been submitted (not unsubmitted)
+  const submissions = quiz.quizSubmissions.filter(
+    (sub) => sub.status !== "unsubmitted",
+  );
+
   res.status(200).json({
     success: true,
-    data: quiz.quizSubmissions,
+    data: {
+      quiz: {
+        _id: quiz._id,
+        title: quiz.title,
+        quizPoints: quiz.quizPoints,
+        hasEssay: quiz.hasEssay,
+        questions: quiz.questions,
+      },
+      submissions,
+    },
   });
 });
 
@@ -889,7 +969,7 @@ exports.submitQuizResponse = asyncHandler(async (req, res, next) => {
 
   // Check if student already submitted
   const existingSubmission = quiz.quizSubmissions.find(
-    (submission) => submission.student.toString() === req.user.id
+    (submission) => submission.student.toString() === req.user.id,
   );
 
   if (existingSubmission) {
@@ -898,6 +978,7 @@ exports.submitQuizResponse = asyncHandler(async (req, res, next) => {
 
   // Grade the submission
   let totalScore = 0;
+  let hasEssay = false;
   const gradedAnswers = submittedAnswers.map((submittedAnswer) => {
     const question = quiz.questions.id(submittedAnswer.questionId);
     if (!question) {
@@ -906,30 +987,83 @@ exports.submitQuizResponse = asyncHandler(async (req, res, next) => {
 
     let isCorrect = false;
     let pointsEarned = 0;
+    let manuallyGraded = false;
 
-    if (question.type === "multiple_choice" || question.type === "true_false") {
-      isCorrect = submittedAnswer.answer === question.answer;
+    if (question.type === "essay") {
+      // Essay questions need manual grading
+      hasEssay = true;
+      manuallyGraded = false;
+      isCorrect = false;
+      pointsEarned = 0;
+    } else if (
+      question.type === "multiple_choice" ||
+      question.type === "true_false"
+    ) {
+      // For multiple choice and true/false, compare the selected option text with correct option
+      const correctOption = question.options.find((opt) => opt.isCorrect);
+      if (correctOption) {
+        // Student's answer is the option text they selected
+        isCorrect = submittedAnswer.answer === correctOption.text;
+      }
+
+      if (isCorrect) {
+        pointsEarned = question.itemPoints || 1;
+        totalScore += pointsEarned;
+      }
     } else if (question.type === "multiple_answers") {
-      const correctAnswers = Array.isArray(question.answer)
-        ? question.answer
-        : [];
-      const userAnswers = Array.isArray(submittedAnswer.answer)
-        ? submittedAnswer.answer
-        : [];
-      isCorrect =
-        correctAnswers.length === userAnswers.length &&
-        correctAnswers.every((answer) => userAnswers.includes(answer));
-    }
+      // Get all correct options
+      const correctOptions = question.options
+        .filter((opt) => opt.isCorrect)
+        .map((opt) => opt.text)
+        .sort();
 
-    if (isCorrect) {
-      pointsEarned = question.itemPoints || 1;
-      totalScore += pointsEarned;
+      // Get student's answers and sort them for comparison
+      const userAnswers = Array.isArray(submittedAnswer.answer)
+        ? [...submittedAnswer.answer].sort()
+        : [];
+
+      // Check if arrays match
+      isCorrect =
+        correctOptions.length === userAnswers.length &&
+        correctOptions.every((answer, index) => answer === userAnswers[index]);
+
+      if (isCorrect) {
+        pointsEarned = question.itemPoints || 1;
+        totalScore += pointsEarned;
+      }
+    } else if (question.type === "short_answer") {
+      // Handle short answer grading
+      const studentAnswer = submittedAnswer.answer?.toString().trim() || "";
+      const correctAnswers = question.correctAnswers || [];
+
+      if (correctAnswers.length === 0) {
+        isCorrect = false;
+      } else {
+        if (question.caseSensitive) {
+          isCorrect = correctAnswers.includes(studentAnswer);
+        } else {
+          const lowerStudentAnswer = studentAnswer.toLowerCase();
+          isCorrect = correctAnswers.some(
+            (ans) => ans.toLowerCase() === lowerStudentAnswer,
+          );
+        }
+
+        if (!question.markOthersIncorrect && studentAnswer.length > 0) {
+          isCorrect = true;
+        }
+      }
+
+      if (isCorrect) {
+        pointsEarned = question.itemPoints || 1;
+        totalScore += pointsEarned;
+      }
     }
 
     return {
       ...submittedAnswer,
       isCorrect,
       pointsEarned,
+      manuallyGraded,
     };
   });
 
@@ -937,7 +1071,7 @@ exports.submitQuizResponse = asyncHandler(async (req, res, next) => {
   quiz.quizSubmissions.push({
     student: req.user.id,
     submittedAnswers: gradedAnswers,
-    status: "graded",
+    status: hasEssay ? "partial" : "graded", // Mark as partial if has essay
     quizScore: totalScore,
   });
 
@@ -945,11 +1079,100 @@ exports.submitQuizResponse = asyncHandler(async (req, res, next) => {
 
   res.status(200).json({
     success: true,
-    message: "Quiz submitted successfully",
+    message: hasEssay
+      ? "Quiz submitted successfully. Essay questions will be graded manually by your teacher."
+      : "Quiz submitted successfully",
     data: {
       score: totalScore,
       totalPoints: quiz.quizPoints,
+      hasEssay,
     },
+  });
+});
+
+// @desc    Grade essay question manually
+// @route   PUT /api/v1/quizzes/submissions/:submissionId/grade-essay
+// @access  Private/Teacher,Admin
+exports.gradeEssayQuestion = asyncHandler(async (req, res, next) => {
+  const { questionId, pointsEarned } = req.body;
+  const submissionId = req.params.submissionId;
+
+  const quiz = await Quiz.findOne({
+    "quizSubmissions._id": submissionId,
+  }).populate("quizSubmissions.student", "firstName lastName email userId");
+
+  if (!quiz) {
+    return next(new ErrorResponse("Submission not found", 404));
+  }
+
+  // Check permissions
+  if (
+    req.user.role === "Teacher" &&
+    quiz.createdBy.toString() !== req.user.id
+  ) {
+    return next(
+      new ErrorResponse("Not authorized to grade this submission", 403),
+    );
+  }
+
+  const submission = quiz.quizSubmissions.id(submissionId);
+  if (!submission) {
+    return next(new ErrorResponse("Submission not found", 404));
+  }
+
+  // Find the answer for this question
+  const answer = submission.submittedAnswers.find(
+    (ans) => ans.questionId.toString() === questionId,
+  );
+
+  if (!answer) {
+    return next(new ErrorResponse("Answer not found", 404));
+  }
+
+  // Find the question to get max points
+  const question = quiz.questions.id(questionId);
+  if (!question || question.type !== "essay") {
+    return next(new ErrorResponse("Invalid essay question", 400));
+  }
+
+  // Validate points
+  const points = Number(pointsEarned);
+  if (isNaN(points) || points < 0 || points > question.itemPoints) {
+    return next(
+      new ErrorResponse(
+        `Points must be between 0 and ${question.itemPoints}`,
+        400,
+      ),
+    );
+  }
+
+  // Update the answer
+  answer.pointsEarned = points;
+  answer.isCorrect = points > 0;
+  answer.manuallyGraded = true;
+
+  // Recalculate total score
+  submission.quizScore = submission.submittedAnswers.reduce(
+    (total, ans) => total + (ans.pointsEarned || 0),
+    0,
+  );
+
+  // Check if all essay questions are graded
+  const allEssaysGraded = submission.submittedAnswers.every((ans) => {
+    const q = quiz.questions.id(ans.questionId);
+    return q.type !== "essay" || ans.manuallyGraded;
+  });
+
+  // Update submission status
+  if (allEssaysGraded && submission.status === "partial") {
+    submission.status = "graded";
+  }
+
+  await quiz.save();
+
+  res.status(200).json({
+    success: true,
+    data: submission,
   });
 });
 
@@ -972,7 +1195,7 @@ exports.gradeQuizSubmission = asyncHandler(async (req, res, next) => {
     quiz.createdBy.toString() !== req.user.id
   ) {
     return next(
-      new ErrorResponse("Not authorized to grade this submission", 403)
+      new ErrorResponse("Not authorized to grade this submission", 403),
     );
   }
 
@@ -1001,7 +1224,7 @@ exports.gradeQuizSubmission = asyncHandler(async (req, res, next) => {
 exports.getQuizStatistics = asyncHandler(async (req, res, next) => {
   const quiz = await Quiz.findById(req.params.id).populate(
     "quizSubmissions.student",
-    "firstName lastName email"
+    "firstName lastName email",
   );
 
   if (!quiz) {
@@ -1017,7 +1240,7 @@ exports.getQuizStatistics = asyncHandler(async (req, res, next) => {
   }
 
   const submissions = quiz.quizSubmissions.filter(
-    (sub) => sub.status === "graded"
+    (sub) => sub.status === "graded",
   );
   const totalSubmissions = submissions.length;
 
@@ -1056,3 +1279,59 @@ exports.getQuizStatistics = asyncHandler(async (req, res, next) => {
     },
   });
 });
+
+// Validate form
+const validateForm = () => {
+  if (!formData.title.trim()) {
+    window.alert("Please enter a quiz title");
+    return false;
+  }
+
+  if (!formData.subject) {
+    window.alert("Please select a subject");
+    return false;
+  }
+
+  if (questions.length === 0) {
+    window.alert("Please add at least one question");
+    return false;
+  }
+
+  for (let i = 0; i < questions.length; i++) {
+    const question = questions[i];
+
+    if (!question.text.trim()) {
+      window.alert(`Question ${i + 1} is missing text`);
+      return false;
+    }
+
+    // Skip option validation for short answer questions
+    if (question.type === "short_answer") {
+      // Validate short answer has at least one correct answer
+      if (
+        !question.correctAnswers ||
+        question.correctAnswers.length === 0 ||
+        !question.correctAnswers.some((ans) => ans.trim())
+      ) {
+        window.alert(`Question ${i + 1} needs at least one correct answer`);
+        return false;
+      }
+      continue; // Skip to next question
+    }
+
+    // Validate options for other question types
+    const validOptions = question.options.filter((opt) => opt.text.trim());
+    if (validOptions.length < 2) {
+      window.alert(`Question ${i + 1} needs at least 2 options with text`);
+      return false;
+    }
+
+    const correctOptions = question.options.filter((opt) => opt.isCorrect);
+    if (correctOptions.length === 0) {
+      window.alert(`Question ${i + 1} needs at least one correct answer`);
+      return false;
+    }
+  }
+
+  return true;
+};

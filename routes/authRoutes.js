@@ -7,6 +7,8 @@ const {
   getCurrentUser,
   updateMe,
   uploadUserProfilePicture,
+  resetMyPassword,
+  verifyPassword,
 } = require("../controllers/authController");
 const { protect, authorize } = require("../middleware/authMiddleware"); // Assuming authorize is your role middleware
 const { body, validationResult } = require("express-validator");
@@ -132,5 +134,7 @@ router.get("/me", protect, getCurrentUser); // No body to validate
 router.put("/updateme", protect, validateUpdateMe, updateMe);
 // New route for user profile picture upload - accessible to all authenticated users
 router.post("/upload-profile-picture", protect, uploadUserProfilePicture);
+router.put("/reset-my-password", protect, resetMyPassword);
+router.post("/verify-password", protect, verifyPassword);
 
 module.exports = router;

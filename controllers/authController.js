@@ -29,9 +29,9 @@ const upload = multer({
     } else {
       cb(
         new Error(
-          "Only image files (JPEG, JPG, PNG, GIF, WebP) are allowed for profile pictures!"
+          "Only image files (JPEG, JPG, PNG, GIF, WebP) are allowed for profile pictures!",
         ),
-        false
+        false,
       );
     }
   },
@@ -44,7 +44,7 @@ const upload = multer({
 const uploadImageToFirebase = async (file, folder = "profile-pictures") => {
   try {
     const fileName = `${folder}/${Date.now()}-${Math.round(
-      Math.random() * 1e9
+      Math.random() * 1e9,
     )}${path.extname(file.originalname)}`;
     const fileUpload = bucket.file(fileName);
 
@@ -98,13 +98,13 @@ const uploadUserProfilePicture = asyncHandler(async (req, res, next) => {
 
     try {
       console.log(
-        `User ${req.user.username} uploading profile picture to Firebase Storage...`
+        `User ${req.user.username} uploading profile picture to Firebase Storage...`,
       );
 
       // Upload to Firebase Storage
       const firebaseUrl = await uploadImageToFirebase(
         req.file,
-        `profile-pictures/${req.user.role.toLowerCase()}s`
+        `profile-pictures/${req.user.role.toLowerCase()}s`,
       );
 
       console.log("Profile picture uploaded successfully:", firebaseUrl);
@@ -113,7 +113,7 @@ const uploadUserProfilePicture = asyncHandler(async (req, res, next) => {
       await User.findByIdAndUpdate(
         req.user.id,
         { profilePicture: firebaseUrl },
-        { runValidators: true }
+        { runValidators: true },
       );
 
       res.status(200).json({
@@ -131,8 +131,8 @@ const uploadUserProfilePicture = asyncHandler(async (req, res, next) => {
       return next(
         new ErrorResponse(
           `Error uploading profile picture: ${error.message}`,
-          500
-        )
+          500,
+        ),
       );
     }
   });
@@ -153,7 +153,7 @@ exports.login = asyncHandler(async (req, res, next) => {
 
   if (!identifier || !password) {
     return next(
-      new ErrorResponse("Please provide username/userId and password", 400)
+      new ErrorResponse("Please provide username/userId and password", 400),
     );
   }
 
@@ -164,7 +164,7 @@ exports.login = asyncHandler(async (req, res, next) => {
 
   if (!user || !(await user.comparePassword(password, user.password))) {
     return next(
-      new ErrorResponse("Incorrect username/userId or password", 401)
+      new ErrorResponse("Incorrect username/userId or password", 401),
     );
   }
 
@@ -172,8 +172,8 @@ exports.login = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         `Account status is '${user.status}'. Access denied.`,
-        403
-      )
+        403,
+      ),
     );
   }
 
@@ -244,8 +244,8 @@ exports.register = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         "Missing required fields: userId, username, firstName, lastName, password, role, sex",
-        400
-      )
+        400,
+      ),
     );
   }
 
@@ -254,10 +254,10 @@ exports.register = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         `Invalid value for sex. Allowed values are: ${validSexValues.join(
-          ", "
+          ", ",
         )}.`,
-        400
-      )
+        400,
+      ),
     );
   }
 
@@ -293,8 +293,8 @@ exports.register = asyncHandler(async (req, res, next) => {
       return next(
         new ErrorResponse(
           `Invalid user role '${role}' specified for creation`,
-          400
-        )
+          400,
+        ),
       );
   }
 
@@ -379,16 +379,16 @@ exports.updateMe = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         `Invalid value for sex. Allowed values are: ${validSexValues.join(
-          ", "
+          ", ",
         )}.`,
-        400
-      )
+        400,
+      ),
     );
   }
 
   // Remove undefined fields so they don't overwrite existing data with null
   Object.keys(fieldsToUpdate).forEach(
-    (key) => fieldsToUpdate[key] === undefined && delete fieldsToUpdate[key]
+    (key) => fieldsToUpdate[key] === undefined && delete fieldsToUpdate[key],
   );
 
   if (Object.keys(fieldsToUpdate).length === 0) {
@@ -431,7 +431,7 @@ exports.updatePassword = asyncHandler(async (req, res, next) => {
 
   if (!currentPassword || !newPassword) {
     return next(
-      new ErrorResponse("Please provide current and new password", 400)
+      new ErrorResponse("Please provide current and new password", 400),
     );
   }
 
@@ -486,16 +486,16 @@ exports.updateDetails = asyncHandler(async (req, res, next) => {
     return next(
       new ErrorResponse(
         `Invalid value for sex. Allowed values are: ${validSexValues.join(
-          ", "
+          ", ",
         )}.`,
-        400
-      )
+        400,
+      ),
     );
   }
 
   // Remove undefined fields so they don't overwrite existing data with null
   Object.keys(fieldsToUpdate).forEach(
-    (key) => fieldsToUpdate[key] === undefined && delete fieldsToUpdate[key]
+    (key) => fieldsToUpdate[key] === undefined && delete fieldsToUpdate[key],
   );
 
   if (Object.keys(fieldsToUpdate).length === 0) {
@@ -515,6 +515,69 @@ exports.updateDetails = asyncHandler(async (req, res, next) => {
     success: true,
     data: user,
   });
+});
+
+// @desc    Update current user's password without current password (admin-initiated or special cases)
+// @route   PUT /api/v1/auth/reset-my-password
+// @access  Private
+exports.resetMyPassword = asyncHandler(async (req, res, next) => {
+  const { newPassword } = req.body;
+
+  if (!newPassword) {
+    return next(new ErrorResponse("Please provide new password", 400));
+  }
+
+  if (newPassword.length < 8) {
+    return next(
+      new ErrorResponse("Password must be at least 8 characters", 400),
+    );
+  }
+
+  const user = await User.findById(req.user.id).select("+password");
+
+  if (!user) {
+    return next(new ErrorResponse("User not found", 404));
+  }
+
+  // Update password directly
+  user.password = newPassword;
+  await user.save(); // Pre-save hook in User model will hash it
+
+  res.status(200).json({
+    success: true,
+    message: "Password updated successfully",
+  });
+});
+
+// @desc    Verify if provided password matches current user's password
+// @route   POST /api/v1/auth/verify-password
+// @access  Private
+exports.verifyPassword = asyncHandler(async (req, res, next) => {
+  const { password } = req.body;
+
+  if (!password) {
+    return next(new ErrorResponse("Please provide password to verify", 400));
+  }
+
+  const user = await User.findById(req.user.id).select("+password");
+
+  if (!user) {
+    return next(new ErrorResponse("User not found", 404));
+  }
+
+  // Check if password matches - use comparePassword instead of matchPassword
+  const isMatch = await user.comparePassword(password, user.password);
+
+  if (isMatch) {
+    res.status(200).json({
+      success: true,
+      data: {
+        isMatch: true,
+      },
+    });
+  } else {
+    return next(new ErrorResponse("Password does not match", 401));
+  }
 });
 
 // Export the new function

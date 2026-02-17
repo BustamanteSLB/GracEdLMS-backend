@@ -13,6 +13,7 @@ const {
   gradeQuizSubmission,
   getQuizStatistics,
   generateAIQuiz,
+  gradeEssayQuestion, // Add this
 } = require("../controllers/quizController");
 const { protect, authorize } = require("../middleware/authMiddleware");
 const multer = require("multer");
@@ -146,6 +147,12 @@ router.put(
   "/submissions/:submissionId/grade",
   authorize("Teacher", "Admin"),
   gradeQuizSubmission
+);
+// Add essay grading route
+router.put(
+  "/submissions/:submissionId/grade-essay",
+  authorize("Teacher", "Admin"),
+  gradeEssayQuestion
 );
 
 // Quiz statistics
