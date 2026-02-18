@@ -358,6 +358,9 @@ exports.getAllSubjects = asyncHandler(async (req, res, next) => {
 
   if (req.user && req.user.role === "Teacher") {
     findQuery["teachers.teacher"] = req.user.id;
+  } else if (req.user && req.user.role === "Student") {
+    // FIX: Students should only see subjects they are enrolled in
+    findQuery["students"] = req.user.id;
   } else {
     if (req.query.teacher) {
       findQuery["teachers.teacher"] = req.query.teacher;

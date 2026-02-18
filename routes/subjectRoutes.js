@@ -41,27 +41,27 @@ router.put("/:subjectId/unassign-teacher", authorize("Admin"), unassignTeacher);
 router.put(
   "/:subjectId/enroll-student",
   authorize("Admin", "Teacher"),
-  enrollStudent
+  enrollStudent,
 );
 router.put(
   "/:subjectId/unenroll-student/:studentIdentifier",
   authorize("Admin", "Teacher", "Student"),
-  unenrollStudent
+  unenrollStudent,
 );
 router.put(
   "/:subjectId/bulk-enroll-students",
   authorize("Admin", "Teacher"),
-  bulkEnrollStudents
+  bulkEnrollStudents,
 );
 router.put(
   "/:id/upload-image",
   authorize("Admin", "Teacher"),
-  uploadSubjectImage
+  uploadSubjectImage,
 );
 router.delete(
   "/:id/delete-image",
   authorize("Admin", "Teacher"),
-  deleteSubjectImage
+  deleteSubjectImage,
 );
 
 module.exports = router;

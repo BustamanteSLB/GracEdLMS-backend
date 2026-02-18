@@ -737,11 +737,6 @@ exports.getQuizzes = asyncHandler(async (req, res, next) => {
 
   let query = {};
 
-  // Filter by subject if provided
-  if (subject) {
-    query.subject = subject;
-  }
-
   // Filter by status if provided
   if (status) {
     query.status = status;
@@ -760,13 +755,60 @@ exports.getQuizzes = asyncHandler(async (req, res, next) => {
   // Teachers can only see their own quizzes
   if (req.user.role === "Teacher") {
     query.createdBy = req.user.id;
+
+    // Teachers can also filter by subject
+    if (subject) {
+      query.subject = subject;
+    }
+  }
+
+  // Students can only see quizzes for subjects they are enrolled in
+  if (req.user.role === "Student") {
+    // FIX: Use correct field name 'students' instead of 'enrolledStudents.student'
+    const enrolledSubjects = await Subject.find({
+      students: req.user.id,
+      isArchived: false,
+    }).select("_id");
+
+    const enrolledSubjectIds = enrolledSubjects.map((s) => s._id);
+
+    if (enrolledSubjectIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        count: 0,
+        data: [],
+      });
+    }
+
+    // If a specific subject filter is provided, validate enrollment
+    if (subject) {
+      const isEnrolled = enrolledSubjectIds.some(
+        (id) => id.toString() === subject.toString(),
+      );
+      if (!isEnrolled) {
+        return res.status(200).json({
+          success: true,
+          count: 0,
+          data: [],
+        });
+      }
+      query.subject = subject;
+    } else {
+      // Limit to only enrolled subjects
+      query.subject = { $in: enrolledSubjectIds };
+    }
+  }
+
+  // Admins can filter by subject if provided
+  if (req.user.role === "Admin" && subject) {
+    query.subject = subject;
   }
 
   const quizzes = await Quiz.find(query)
     .populate("createdBy", "firstName lastName email")
     .populate(
       "subject",
-      "subjectName description gradeLevel section schoolYear",
+      "subjectName description gradeLevel section schoolYear subjectImage",
     )
     .sort({ createdAt: -1 });
 
