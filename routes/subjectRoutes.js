@@ -14,6 +14,8 @@ const {
   bulkEnrollStudents,
   uploadSubjectImage,
   deleteSubjectImage,
+  getActiveSchoolYear,
+  setActiveSchoolYear,
 } = require("../controllers/subjectController");
 const { protect, authorize } = require("../middleware/authMiddleware");
 
@@ -25,6 +27,9 @@ router
   .route("/")
   .post(authorize("Admin", "Teacher"), createSubject)
   .get(getAllSubjects);
+
+router.get("/active-school-year", getActiveSchoolYear);
+router.put("/active-school-year", authorize("Admin"), setActiveSchoolYear);
 
 router
   .route("/:id")

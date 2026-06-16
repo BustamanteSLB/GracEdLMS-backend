@@ -128,6 +128,21 @@ const schoolSchema = new mongoose.Schema(
       },
     ],
 
+    // Gallery Videos (for teachers and students to see)
+    galleryVideos: [
+      {
+        url: {
+          type: String,
+          required: true,
+        },
+        caption: String,
+        uploadedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+
     // Meta
     lastUpdatedBy: {
       type: mongoose.Schema.Types.ObjectId,

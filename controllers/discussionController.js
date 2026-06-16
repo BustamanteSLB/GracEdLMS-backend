@@ -304,7 +304,7 @@ exports.updateDiscussion = asyncHandler(async (req, res, next) => {
   const isTeacherAssigned = isAssignedTeacher(discussion.subject, req.user.id);
   const isAdmin = req.user.role === "Admin";
 
-  if (!isAuthor && !isTeacherAssigned && !isAdmin) {
+  if (!isAuthor) {
     return next(
       new ErrorResponse(
         "You are not authorized to update this discussion.",
@@ -384,7 +384,7 @@ exports.deleteDiscussion = asyncHandler(async (req, res, next) => {
   const isTeacherAssigned = isAssignedTeacher(discussion.subject, req.user.id);
   const isAdmin = req.user.role === "Admin";
 
-  if (!isAuthor && !isTeacherAssigned && !isAdmin) {
+  if (!isAuthor) {
     return next(
       new ErrorResponse(
         "You are not authorized to delete this discussion.",
@@ -593,7 +593,8 @@ exports.addReplyToComment = asyncHandler(async (req, res, next) => {
     })
     .populate({
       path: "comments.replies.replies.replies.replyTo",
-      select: "firstName middleName lastName username role profilePicture",
+      select:
+        "firstName middleName lastName email username role profilePicture",
     });
 
   // 8) Return the updated discussion
@@ -867,7 +868,8 @@ exports.addReplyToComment = asyncHandler(async (req, res, next) => {
     })
     .populate({
       path: "comments.replies.replies.replies.replyTo",
-      select: "firstName middleName lastName username role profilePicture",
+      select:
+        "firstName middleName lastName email username role profilePicture",
     });
 
   // 8) Return the updated discussion
@@ -878,9 +880,9 @@ exports.addReplyToComment = asyncHandler(async (req, res, next) => {
   });
 });
 
-// @desc    Hide/Unhide a comment (Admin only)
+// @desc    Hide/Unhide a comment (Admin or Teacher on own discussion)
 // @route   PATCH /api/v1/discussions/:discussionId/comments/:commentId/hide
-// @access  Private (Admin only)
+// @access  Private (Admin, or Teacher on own discussion)
 exports.toggleHideComment = asyncHandler(async (req, res, next) => {
   const { discussionId, commentId } = req.params;
 
@@ -894,18 +896,33 @@ exports.toggleHideComment = asyncHandler(async (req, res, next) => {
     );
   }
 
-  // 2) Admin only
-  if (req.user.role !== "Admin") {
-    return next(
-      new ErrorResponse("Only admins can hide/unhide comments.", 403),
-    );
-  }
+  // 2) Fetch discussion with subject info
+  const discussion = await Discussion.findById(discussionId).populate({
+    path: "subject",
+    select: "teachers",
+    populate: {
+      path: "teachers.teacher",
+      select: "_id email username",
+    },
+  });
 
-  // 3) Fetch discussion
-  const discussion = await Discussion.findById(discussionId);
   if (!discussion) {
     return next(
       new ErrorResponse(`Discussion not found with ID ${discussionId}`, 404),
+    );
+  }
+
+  // 3) Authorization: Admin OR (Teacher of subject AND discussion author)
+  const isAdmin = req.user.role === "Admin";
+  const isDiscussionAuthor = discussion.author.equals(req.user.id);
+  const isTeacherAssigned = isAssignedTeacher(discussion.subject, req.user.id);
+
+  if (!isAdmin && !(isTeacherAssigned && isDiscussionAuthor)) {
+    return next(
+      new ErrorResponse(
+        "You can only hide comments on discussions you created, or you must be an admin.",
+        403,
+      ),
     );
   }
 
@@ -1274,7 +1291,8 @@ exports.toggleHideReply = asyncHandler(async (req, res, next) => {
     })
     .populate({
       path: "comments.replies.replies.replies.replyTo",
-      select: "firstName middleName lastName username role profilePicture",
+      select:
+        "firstName middleName lastName email username role profilePicture",
     })
     .populate({
       path: "comments.replies.replies.replies.hiddenBy",
@@ -1293,3 +1311,5 @@ exports.toggleHideReply = asyncHandler(async (req, res, next) => {
 // ✅ IMPORTANT: Remove any module.exports statement that was in the middle of the file
 // ✅ The exports should ONLY use the exports.functionName = ... pattern shown above
 // ✅ Do NOT add module.exports = { ... } at the end
+
+

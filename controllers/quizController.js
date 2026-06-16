@@ -14,11 +14,525 @@ const officeParser = require("officeparser");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const https = require("https");
+const http = require("http");
+const PDFDocument = require("pdfkit");
 
 // Initialize OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
+
+const parseBooleanField = (value) => {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  return value === "true" || value === true;
+};
+
+const hashSeed = (seed) => {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (Math.imul(31, hash) + seed.charCodeAt(i)) | 0;
+  }
+  return hash >>> 0;
+};
+
+const shuffleQuestionsForStudent = (questions, studentId, quizId) => {
+  const items = [...questions];
+  let state = hashSeed(`${studentId}-${quizId}`);
+  const random = () => {
+    state = (Math.imul(1664525, state) + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+
+  return items;
+};
+
+const applyStudentQuizTransforms = (quiz, studentId) => {
+  const quizObj = quiz.toObject ? quiz.toObject() : { ...quiz };
+
+  if (quizObj.shuffleQuestions && quizObj.questions?.length > 1) {
+    quizObj.questions = shuffleQuestionsForStudent(
+      quizObj.questions,
+      studentId,
+      quizObj._id.toString(),
+    );
+  }
+
+  return quizObj;
+};
+
+const PDF_COLORS = {
+  title: "#111827",
+  sectionHeader: "#374151",
+  sectionDesc: "#6B7280",
+  meta: "#6B7280",
+  border: "#E5E7EB",
+  inputBg: "#F9FAFB",
+  correctBg: "#ECFDF5",
+  correctTitle: "#059669",
+  correctAnswer: "#047857",
+  body: "#374151",
+  placeholder: "#6B7280",
+  radioInactive: "#D1D5DB",
+  radioActive: "#10B981",
+};
+
+const PDF_MARGIN = 50;
+const PDF_PAGE_WIDTH = 595.28;
+const PDF_CONTENT_WIDTH = PDF_PAGE_WIDTH - PDF_MARGIN * 2;
+const PDF_CARD_PADDING = 14;
+const PDF_INNER_WIDTH = PDF_CONTENT_WIDTH - PDF_CARD_PADDING * 2;
+
+const PDF_FONT = {
+  title: 16,
+  sectionHeader: 12,
+  sectionDesc: 10,
+  meta: 9,
+  question: 11,
+  option: 9.5,
+  footer: 8.5,
+  lineGap: 2,
+};
+
+const PDF_SPACING = {
+  afterTitle: 6,
+  afterSection: 5,
+  afterMeta: 10,
+  afterQuestion: 5,
+  afterOption: 5,
+  afterFooter: 12,
+  betweenCards: 10,
+};
+
+const fetchImageBuffer = (url) =>
+  new Promise((resolve, reject) => {
+    const requestUrl = url.startsWith("https://")
+      ? url
+      : url.replace(/^http:\/\//i, "https://");
+    const client = requestUrl.startsWith("https") ? https : http;
+
+    client
+      .get(requestUrl, (response) => {
+        if (
+          response.statusCode >= 300 &&
+          response.statusCode < 400 &&
+          response.headers.location
+        ) {
+          fetchImageBuffer(response.headers.location).then(resolve).catch(reject);
+          return;
+        }
+
+        if (response.statusCode !== 200) {
+          reject(new Error(`Image request failed: ${response.statusCode}`));
+          return;
+        }
+
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () => resolve(Buffer.concat(chunks)));
+        response.on("error", reject);
+      })
+      .on("error", reject);
+  });
+
+const preloadQuizImages = async (questions) => {
+  const imageBuffers = {};
+
+  for (const question of questions) {
+    if (!question.images?.length) continue;
+
+    for (const url of question.images) {
+      if (!url || imageBuffers[url] || !url.startsWith("http")) continue;
+
+      try {
+        imageBuffers[url] = await fetchImageBuffer(url);
+      } catch (error) {
+        console.error(
+          `Failed to load quiz image for PDF: ${url}`,
+          error.message,
+        );
+      }
+    }
+  }
+
+  return imageBuffers;
+};
+
+const getPdfBottom = (doc) => doc.page.height - PDF_MARGIN;
+
+const ensurePdfSpace = (doc, height) => {
+  if (doc.y + height > getPdfBottom(doc)) {
+    doc.addPage();
+    doc.x = PDF_MARGIN + PDF_CARD_PADDING;
+  }
+};
+
+const setPdfContentX = (doc) => {
+  doc.x = PDF_MARGIN + PDF_CARD_PADDING;
+};
+
+const drawPdfCardBorder = (doc, startY, endY) => {
+  const height = endY - startY;
+  if (height <= 4) return;
+
+  doc
+    .roundedRect(PDF_MARGIN, startY, PDF_CONTENT_WIDTH, height, 6)
+    .lineWidth(1)
+    .strokeColor(PDF_COLORS.border)
+    .stroke();
+};
+
+const drawPdfQuestionDivider = (doc) => {
+  const y = doc.y;
+  doc
+    .moveTo(PDF_MARGIN, y)
+    .lineTo(PDF_MARGIN + PDF_CONTENT_WIDTH, y)
+    .lineWidth(1)
+    .strokeColor(PDF_COLORS.border)
+    .stroke();
+  doc.y = y + PDF_SPACING.betweenCards;
+  setPdfContentX(doc);
+};
+
+const drawPdfOptionHighlight = (doc, x, y, width, height) => {
+  doc
+    .roundedRect(x, y, width, height, 8)
+    .fillColor(PDF_COLORS.correctBg)
+    .fill();
+};
+
+const drawPdfRadio = (doc, x, y, selected) => {
+  doc.circle(x, y, 5).lineWidth(1).strokeColor(PDF_COLORS.radioInactive).stroke();
+  if (selected) {
+    doc.circle(x, y, 3).fillColor(PDF_COLORS.radioActive).fill();
+  }
+};
+
+const drawPdfCheckbox = (doc, x, y, checked) => {
+  doc
+    .roundedRect(x, y, 12, 12, 2)
+    .lineWidth(1)
+    .strokeColor(PDF_COLORS.radioInactive)
+    .stroke();
+
+  if (checked) {
+    doc
+      .moveTo(x + 2, y + 6)
+      .lineTo(x + 5, y + 9)
+      .lineTo(x + 10, y + 3)
+      .lineWidth(1.5)
+      .strokeColor(PDF_COLORS.radioActive)
+      .stroke();
+  }
+};
+
+const measurePdfTextHeight = (
+  doc,
+  text,
+  fontSize,
+  width,
+  font = "Helvetica",
+  lineGap = PDF_FONT.lineGap,
+) => {
+  doc.font(font).fontSize(fontSize);
+  return doc.heightOfString(text || "", { width, lineGap });
+};
+
+const drawPdfFlowText = (doc, text, options = {}) => {
+  const {
+    font = "Helvetica",
+    fontSize = PDF_FONT.option,
+    color = PDF_COLORS.body,
+    width = PDF_INNER_WIDTH,
+    lineGap = PDF_FONT.lineGap,
+    indent = 0,
+  } = options;
+
+  ensurePdfSpace(
+    doc,
+    measurePdfTextHeight(doc, text, fontSize, width - indent, font, lineGap) + 4,
+  );
+  setPdfContentX(doc);
+  doc.x += indent;
+  doc
+    .font(font)
+    .fontSize(fontSize)
+    .fillColor(color)
+    .text(text || "", { width: width - indent, lineGap });
+  setPdfContentX(doc);
+};
+
+const drawPdfOptionRow = (doc, question, option, contentX) => {
+  const optionText = option.text || "";
+  const optionFont = option.isCorrect ? "Helvetica-Bold" : "Helvetica";
+  const textWidth = PDF_INNER_WIDTH - 32;
+  const textHeight = measurePdfTextHeight(
+    doc,
+    optionText,
+    PDF_FONT.option,
+    textWidth,
+    optionFont,
+    PDF_FONT.lineGap,
+  );
+  const rowHeight = Math.max(18, textHeight + 10);
+
+  ensurePdfSpace(doc, rowHeight + PDF_SPACING.afterOption);
+  const rowY = doc.y;
+
+  if (option.isCorrect) {
+    drawPdfOptionHighlight(doc, contentX, rowY, PDF_INNER_WIDTH, rowHeight);
+  }
+
+  if (question.type === "multiple_answers") {
+    drawPdfCheckbox(doc, contentX + 4, rowY + 4, option.isCorrect);
+  } else {
+    drawPdfRadio(doc, contentX + 12, rowY + rowHeight / 2, option.isCorrect);
+  }
+
+  doc.x = contentX + 26;
+  doc.y = rowY + 5;
+  doc
+    .font(optionFont)
+    .fontSize(PDF_FONT.option)
+    .fillColor(PDF_COLORS.body)
+    .text(optionText, { width: textWidth, lineGap: PDF_FONT.lineGap });
+
+  doc.y += PDF_SPACING.afterOption;
+  setPdfContentX(doc);
+};
+
+const embedPdfQuestionImage = (doc, buffer, contentX) => {
+  const maxHeight = 140;
+  const image = doc.openImage(buffer);
+  const scale = Math.min(
+    PDF_INNER_WIDTH / image.width,
+    maxHeight / image.height,
+    1,
+  );
+  const width = image.width * scale;
+  const height = image.height * scale;
+
+  ensurePdfSpace(doc, height + 10);
+  const imageTop = doc.y;
+  doc.image(buffer, contentX, imageTop, { width, height });
+  doc.y = imageTop + height + 8;
+  setPdfContentX(doc);
+};
+
+const buildQuizPdf = (doc, quiz, imageBuffers) => {
+  const contentX = PDF_MARGIN + PDF_CARD_PADDING;
+  doc.y = PDF_MARGIN;
+  setPdfContentX(doc);
+
+  ensurePdfSpace(doc, 80);
+  const headerStartY = doc.y;
+  doc.y = headerStartY + PDF_CARD_PADDING;
+  setPdfContentX(doc);
+
+  drawPdfFlowText(doc, quiz.title, {
+    font: "Helvetica-Bold",
+    fontSize: PDF_FONT.title,
+    color: PDF_COLORS.title,
+  });
+  doc.y += PDF_SPACING.afterTitle;
+
+  if (quiz.sectionHeader) {
+    drawPdfFlowText(doc, quiz.sectionHeader, {
+      font: "Helvetica-Bold",
+      fontSize: PDF_FONT.sectionHeader,
+      color: PDF_COLORS.sectionHeader,
+    });
+    doc.y += PDF_SPACING.afterSection;
+  }
+
+  if (quiz.sectionDescription) {
+    drawPdfFlowText(doc, quiz.sectionDescription, {
+      fontSize: PDF_FONT.sectionDesc,
+      color: PDF_COLORS.sectionDesc,
+    });
+    doc.y += PDF_SPACING.afterSection;
+  }
+
+  const metaParts = [
+    `Subject: ${quiz.subject?.subjectName || "No Subject"}`,
+    `Quarter: ${quiz.quarter || "N/A"}`,
+    `Points: ${quiz.quizPoints || 0}`,
+  ];
+  if (quiz.timeLimit) {
+    metaParts.push(`Time: ${quiz.timeLimit} minutes`);
+  }
+
+  drawPdfFlowText(doc, metaParts.join("   "), {
+    fontSize: PDF_FONT.meta,
+    color: PDF_COLORS.meta,
+  });
+
+  const headerEndY = doc.y + PDF_CARD_PADDING;
+  drawPdfCardBorder(doc, headerStartY, headerEndY);
+  doc.y = headerEndY + PDF_SPACING.betweenCards;
+  setPdfContentX(doc);
+
+  quiz.questions.forEach((question, index) => {
+    if (index > 0) {
+      drawPdfQuestionDivider(doc);
+    }
+
+    const questionLabel = `${index + 1}. ${question.text}`;
+    const questionHeight = measurePdfTextHeight(
+      doc,
+      questionLabel,
+      PDF_FONT.question,
+      PDF_INNER_WIDTH,
+      "Helvetica-Bold",
+      PDF_FONT.lineGap,
+    );
+    ensurePdfSpace(doc, questionHeight + 40);
+    setPdfContentX(doc);
+
+    drawPdfFlowText(doc, questionLabel, {
+      font: "Helvetica-Bold",
+      fontSize: PDF_FONT.question,
+      color: PDF_COLORS.title,
+    });
+    doc.y += PDF_SPACING.afterQuestion;
+
+    if (question.images?.length) {
+      for (const imageUrl of question.images) {
+        const buffer = imageBuffers[imageUrl];
+        if (!buffer) continue;
+
+        try {
+          embedPdfQuestionImage(doc, buffer, contentX);
+        } catch (error) {
+          console.error("Failed to embed quiz image in PDF:", error.message);
+        }
+      }
+    }
+
+    if (question.type === "short_answer") {
+      const inputHeight = 28;
+      ensurePdfSpace(doc, inputHeight + 8);
+      const inputY = doc.y;
+      doc
+        .roundedRect(contentX, inputY, PDF_INNER_WIDTH, inputHeight, 6)
+        .fillColor(PDF_COLORS.inputBg)
+        .fill();
+      doc
+        .font("Helvetica")
+        .fontSize(PDF_FONT.option)
+        .fillColor(PDF_COLORS.placeholder)
+        .text("Your answer", contentX + 10, inputY + 8, {
+          width: PDF_INNER_WIDTH - 20,
+          lineGap: PDF_FONT.lineGap,
+        });
+      doc.y = inputY + inputHeight + 8;
+      setPdfContentX(doc);
+
+      if (question.correctAnswers?.length) {
+        const correctLines = question.correctAnswers
+          .map((answer) => `• ${answer}`)
+          .join("\n");
+        const answersHeight = measurePdfTextHeight(
+          doc,
+          correctLines,
+          PDF_FONT.option,
+          PDF_INNER_WIDTH - 20,
+          "Helvetica",
+          PDF_FONT.lineGap,
+        );
+        let boxHeight = answersHeight + 28;
+        if (question.caseSensitive) {
+          boxHeight += 14;
+        }
+
+        ensurePdfSpace(doc, boxHeight + 8);
+        const boxY = doc.y;
+        doc
+          .roundedRect(contentX, boxY, PDF_INNER_WIDTH, boxHeight, 6)
+          .fillColor(PDF_COLORS.correctBg)
+          .fill();
+
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(PDF_FONT.option)
+          .fillColor(PDF_COLORS.correctTitle)
+          .text("Correct answer(s):", contentX + 10, boxY + 8, {
+            width: PDF_INNER_WIDTH - 20,
+            lineGap: PDF_FONT.lineGap,
+          });
+
+        doc
+          .font("Helvetica")
+          .fontSize(PDF_FONT.option)
+          .fillColor(PDF_COLORS.correctAnswer)
+          .text(correctLines, contentX + 10, boxY + 22, {
+            width: PDF_INNER_WIDTH - 20,
+            lineGap: PDF_FONT.lineGap,
+          });
+
+        if (question.caseSensitive) {
+          doc
+            .font("Helvetica-Oblique")
+            .fontSize(PDF_FONT.footer)
+            .fillColor(PDF_COLORS.correctTitle)
+            .text("(Case sensitive)", contentX + 10, doc.y + 2, {
+              width: PDF_INNER_WIDTH - 20,
+            });
+        }
+
+        doc.y = boxY + boxHeight + 8;
+        setPdfContentX(doc);
+      }
+    } else if (question.type === "essay") {
+      const lineHeight = 20;
+      const lineCount = 3;
+      const blockHeight = lineCount * (lineHeight + 4);
+      ensurePdfSpace(doc, blockHeight + 8);
+      const essayY = doc.y;
+      for (let line = 0; line < lineCount; line += 1) {
+        doc
+          .roundedRect(
+            contentX,
+            essayY + line * (lineHeight + 4),
+            PDF_INNER_WIDTH,
+            lineHeight,
+            4,
+          )
+          .fillColor(PDF_COLORS.inputBg)
+          .fill();
+      }
+      doc.y = essayY + blockHeight + 8;
+      setPdfContentX(doc);
+    } else if (
+      question.type === "multiple_choice" ||
+      question.type === "true_false" ||
+      question.type === "multiple_answers"
+    ) {
+      question.options.forEach((option) => {
+        drawPdfOptionRow(doc, question, option, contentX);
+      });
+    }
+
+    const typeLabel = (question.type || "").replace(/_/g, " ");
+    const footerText = `Type: ${typeLabel}     Points: ${question.itemPoints || 1}`;
+    drawPdfFlowText(doc, footerText, {
+      fontSize: PDF_FONT.footer,
+      color: PDF_COLORS.meta,
+    });
+    doc.y += PDF_SPACING.afterFooter;
+    setPdfContentX(doc);
+  });
+};
 
 // Helper function to extract text from Firebase Storage file
 const extractTextFromBuffer = async (buffer, mimetype) => {
@@ -154,7 +668,7 @@ Important rules:
     console.log("Calling OpenAI API with GPT-5-mini...");
 
     const response = await openai.chat.completions.create({
-      model: "gpt-5-mini", // Updated to latest GPT-5-mini model
+      model: "gpt-5.4-mini", // Updated to latest GPT-5.4-mini model
       messages: [
         {
           role: "system",
@@ -429,6 +943,7 @@ exports.createQuiz = asyncHandler(async (req, res, next) => {
     questions,
     timeLimit,
     quarter,
+    shuffleQuestions,
   } = req.body;
 
   // Validate subject exists
@@ -523,6 +1038,7 @@ exports.createQuiz = asyncHandler(async (req, res, next) => {
     quarter,
     quizPoints,
     hasEssay,
+    shuffleQuestions: parseBooleanField(shuffleQuestions) ?? false,
     status: "draft",
   });
 
@@ -564,6 +1080,7 @@ exports.updateQuiz = asyncHandler(async (req, res, next) => {
     timeLimit,
     quarter,
     status,
+    shuffleQuestions,
   } = req.body;
 
   // Process uploaded images
@@ -657,6 +1174,8 @@ exports.updateQuiz = asyncHandler(async (req, res, next) => {
       quizPoints,
       hasEssay,
       status: status || quiz.status,
+      shuffleQuestions:
+        parseBooleanField(shuffleQuestions) ?? quiz.shuffleQuestions,
     },
     { new: true, runValidators: true },
   );
@@ -812,10 +1331,15 @@ exports.getQuizzes = asyncHandler(async (req, res, next) => {
     )
     .sort({ createdAt: -1 });
 
+  const data =
+    req.user.role === "Student"
+      ? quizzes.map((quiz) => applyStudentQuizTransforms(quiz, req.user.id))
+      : quizzes;
+
   res.status(200).json({
     success: true,
-    count: quizzes.length,
-    data: quizzes,
+    count: data.length,
+    data,
   });
 });
 
@@ -843,9 +1367,14 @@ exports.getQuiz = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse("Not authorized to access this quiz", 403));
   }
 
+  const data =
+    req.user.role === "Student"
+      ? applyStudentQuizTransforms(quiz, req.user.id)
+      : quiz;
+
   res.status(200).json({
     success: true,
-    data: quiz,
+    data,
   });
 });
 
@@ -939,6 +1468,7 @@ exports.duplicateQuiz = asyncHandler(async (req, res, next) => {
     timeLimit: originalQuiz.timeLimit,
     quarter: originalQuiz.quarter,
     quizPoints: originalQuiz.quizPoints,
+    shuffleQuestions: originalQuiz.shuffleQuestions,
     status: "draft",
   });
 
@@ -1377,3 +1907,46 @@ const validateForm = () => {
 
   return true;
 };
+
+// @desc    Download quiz as PDF
+// @route   GET /api/v1/quizzes/:id/download
+// @access  Private/Teacher,Admin
+exports.downloadQuizPdf = asyncHandler(async (req, res, next) => {
+  const quiz = await Quiz.findById(req.params.id)
+    .populate("createdBy", "firstName lastName email")
+    .populate("subject", "subjectName gradeLevel section schoolYear");
+
+  if (!quiz) {
+    return next(new ErrorResponse("Quiz not found", 404));
+  }
+
+  if (
+    req.user.role === "Teacher" &&
+    quiz.createdBy._id.toString() !== req.user.id
+  ) {
+    return next(new ErrorResponse("Not authorized to download this quiz", 403));
+  }
+
+  const safeFileName = `${quiz.title || "quiz"}`
+    .replace(/[^a-z0-9]+/gi, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+
+  const imageBuffers = await preloadQuizImages(quiz.questions);
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${safeFileName}.pdf"`,
+  );
+
+  const doc = new PDFDocument({
+    size: "A4",
+    margin: PDF_MARGIN,
+    bufferPages: true,
+  });
+
+  doc.pipe(res);
+  buildQuizPdf(doc, quiz, imageBuffers);
+  doc.end();
+});

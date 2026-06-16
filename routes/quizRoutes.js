@@ -14,6 +14,7 @@ const {
   getQuizStatistics,
   generateAIQuiz,
   gradeEssayQuestion, // Add this
+  downloadQuizPdf,
 } = require("../controllers/quizController");
 const { protect, authorize } = require("../middleware/authMiddleware");
 const multer = require("multer");
@@ -135,6 +136,7 @@ router
 router.put("/:id/publish", authorize("Teacher", "Admin"), publishQuiz);
 router.put("/:id/archive", authorize("Teacher", "Admin"), archiveQuiz);
 router.post("/:id/duplicate", authorize("Teacher", "Admin"), duplicateQuiz);
+router.get("/:id/download-pdf", authorize("Teacher", "Admin"), downloadQuizPdf);
 
 // Quiz submissions
 router.get(

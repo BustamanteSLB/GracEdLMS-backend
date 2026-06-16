@@ -4,6 +4,12 @@ const mongoose = require("mongoose");
 const subjectSchema = new mongoose.Schema(
   {
     subjectName: { type: String, required: true, trim: true },
+    classCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      maxlength: 12,
+    },
     description: { type: String, trim: true },
     gradeLevel: { type: String, trim: true },
     schoolYear: { type: String, trim: true },
@@ -78,6 +84,17 @@ const subjectSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+subjectSchema.index(
+  { classCode: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      isArchived: false,
+      classCode: { $exists: true, $type: "string", $ne: "" },
+    },
+  },
+);
+
 // Add compound index for uniqueness based on subjectName, gradeLevel, section, and schoolYear
 subjectSchema.index(
   {
@@ -93,5 +110,21 @@ subjectSchema.index(
   },
 );
 
+const subjectSettingsSchema = new mongoose.Schema(
+  {
+    activeSchoolYear: { type: String, trim: true, default: null },
+    setBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    setAt: { type: Date, default: null },
+  },
+  { timestamps: true },
+);
+
 const Subject = mongoose.model("Subject", subjectSchema);
+const SubjectSettings = mongoose.model("SubjectSettings", subjectSettingsSchema);
+
 module.exports = Subject;
+module.exports.SubjectSettings = SubjectSettings;

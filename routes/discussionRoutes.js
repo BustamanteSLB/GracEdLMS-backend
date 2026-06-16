@@ -46,10 +46,10 @@ router
     deleteCommentFromDiscussion
   );
 
-// Hide/Unhide comment (Admin only)
+// Hide/Unhide comment (Admin or Teacher on own post)
 router
   .route("/discussions/:discussionId/comments/:commentId/hide")
-  .patch(authorize("Admin"), toggleHideComment);
+  .patch(authorize("Admin", "Teacher"), toggleHideComment);
 
 // Replies to comments
 router
@@ -67,3 +67,5 @@ router
   .patch(authorize("Admin"), toggleHideReply);
 
 module.exports = router;
+
+

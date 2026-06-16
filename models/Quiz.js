@@ -157,6 +157,10 @@ const quizSchema = new mongoose.Schema(
       type: Boolean,
       default: false, // Flag to check if quiz contains essay questions
     },
+    shuffleQuestions: {
+      type: Boolean,
+      default: false, // Whether to randomize question order for each student
+    },
   },
   {
     timestamps: true, // Automatically manage createdAt and updatedAt fields

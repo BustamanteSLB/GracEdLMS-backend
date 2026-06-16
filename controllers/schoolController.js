@@ -1,6 +1,8 @@
 const School = require("../models/School");
 const path = require("path");
 const { bucket } = require("../config/firebaseService");
+const sharp = require("sharp"); // Add this at the top
+const User = require("../models/User");
 
 // @desc    Get school information
 // @route   GET /api/v1/school
@@ -9,7 +11,7 @@ exports.getSchoolInfo = async (req, res, next) => {
   try {
     let school = await School.findOne().populate(
       "lastUpdatedBy",
-      "firstName lastName email"
+      "firstName lastName email",
     );
 
     // If no school exists, create default one
@@ -142,20 +144,23 @@ exports.uploadSchoolImage = async (req, res, next) => {
       });
     }
 
-    // Create unique filename
+    // Convert image to WebP
+    const webpBuffer = await sharp(file.buffer)
+      .webp({ quality: 80 })
+      .toBuffer();
+
+    // Create unique filename with .webp extension
     const timestamp = Date.now();
     const randomString = Math.random().toString(36).substring(7);
-    const extension = path.extname(file.originalname);
-    const filename = `school_${imageType}_${timestamp}_${randomString}${extension}`;
+    const filename = `school_${imageType}_${timestamp}_${randomString}.webp`;
     const filePath = `school/${filename}`;
 
     // Upload to Firebase Storage
     const firebaseFile = bucket.file(filePath);
 
-    // Use file.buffer instead of file.data (multer uses buffer)
-    await firebaseFile.save(file.buffer, {
+    await firebaseFile.save(webpBuffer, {
       metadata: {
-        contentType: file.mimetype,
+        contentType: "image/webp",
       },
       public: true,
     });
@@ -212,12 +217,11 @@ exports.uploadSchoolImage = async (req, res, next) => {
   }
 };
 
-// @desc    Upload multiple gallery images
+// @desc    Upload multiple gallery images and convert to WebP
 // @route   POST /api/v1/school/upload-multiple
 // @access  Private (Admin only)
 exports.uploadMultipleGalleryImages = async (req, res, next) => {
   try {
-    // Check if files were uploaded via multer
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({
         success: false,
@@ -225,44 +229,60 @@ exports.uploadMultipleGalleryImages = async (req, res, next) => {
       });
     }
 
-    const files = req.files; // multer stores multiple files in req.files
+    const files = req.files;
     const uploadedImages = [];
     const failedUploads = [];
 
-    // Get school document
     let school = await School.findOne();
     if (!school) {
       school = await School.create({});
     }
 
-    // Upload each file to Firebase
+    // Check gallery limit
+    const currentGalleryCount = school.galleryImages.length;
+    const availableSlots = 10 - currentGalleryCount;
+
+    if (availableSlots <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Gallery limit reached. Maximum 10 images allowed.",
+      });
+    }
+
+    if (files.length > availableSlots) {
+      return res.status(400).json({
+        success: false,
+        message: `Only ${availableSlots} more image(s) can be uploaded. Maximum 10 images allowed.`,
+      });
+    }
+
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
 
       try {
-        // Create unique filename
+        // Convert image to WebP
+        const webpBuffer = await sharp(file.buffer)
+          .webp({ quality: 80 })
+          .toBuffer();
+
         const timestamp = Date.now();
         const randomString = Math.random().toString(36).substring(7);
-        const extension = path.extname(file.originalname);
-        const filename = `school_gallery_${timestamp}_${i}_${randomString}${extension}`;
+        const filename = `school_gallery_${timestamp}_${i}_${randomString}.webp`;
         const filePath = `school/${filename}`;
 
-        // Upload to Firebase Storage
         const firebaseFile = bucket.file(filePath);
 
-        await firebaseFile.save(file.buffer, {
+        await firebaseFile.save(webpBuffer, {
           metadata: {
-            contentType: file.mimetype,
+            contentType: "image/webp",
           },
           public: true,
         });
 
-        // Get public URL
         const fileUrl = `https://firebasestorage.googleapis.com/v0/b/${
           bucket.name
         }/o/${encodeURIComponent(filePath)}?alt=media`;
 
-        // Add to gallery
         school.galleryImages.push({
           url: fileUrl,
           caption: "",
@@ -282,18 +302,17 @@ exports.uploadMultipleGalleryImages = async (req, res, next) => {
       }
     }
 
-    // Save school document
     school.lastUpdatedBy = req.user._id;
     school.updatedAt = Date.now();
     await school.save();
 
-    // Prepare response
     const response = {
       success: uploadedImages.length > 0,
       data: {
         uploadedCount: uploadedImages.length,
         failedCount: failedUploads.length,
         uploadedImages,
+        remainingSlots: 10 - school.galleryImages.length,
       },
       message:
         uploadedImages.length === files.length
@@ -311,6 +330,89 @@ exports.uploadMultipleGalleryImages = async (req, res, next) => {
     res.status(500).json({
       success: false,
       message: error.message || "Failed to upload images",
+    });
+  }
+};
+
+// @desc    Upload gallery video
+// @route   POST /api/v1/school/upload-video
+// @access  Private (Admin only)
+exports.uploadGalleryVideo = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "No file was uploaded",
+      });
+    }
+
+    const { caption } = req.body;
+    const file = req.file;
+
+    let school = await School.findOne();
+    if (!school) {
+      school = await School.create({});
+    }
+
+    // Check video limit (max 5)
+    const currentVideoCount = school.galleryVideos
+      ? school.galleryVideos.length
+      : 0;
+    if (currentVideoCount >= 5) {
+      return res.status(400).json({
+        success: false,
+        message: "Video limit reached. Maximum 5 videos allowed.",
+      });
+    }
+
+    const timestamp = Date.now();
+    const randomString = Math.random().toString(36).substring(7);
+    const extension = path.extname(file.originalname);
+    const filename = `school_video_${timestamp}_${randomString}${extension}`;
+    const filePath = `school/${filename}`;
+
+    const firebaseFile = bucket.file(filePath);
+
+    await firebaseFile.save(file.buffer, {
+      metadata: {
+        contentType: file.mimetype,
+      },
+      public: true,
+    });
+
+    const fileUrl = `https://firebasestorage.googleapis.com/v0/b/${
+      bucket.name
+    }/o/${encodeURIComponent(filePath)}?alt=media`;
+
+    // Initialize galleryVideos array if it doesn't exist
+    if (!school.galleryVideos) {
+      school.galleryVideos = [];
+    }
+
+    school.galleryVideos.push({
+      url: fileUrl,
+      caption: caption || "",
+      uploadedAt: Date.now(),
+    });
+
+    school.lastUpdatedBy = req.user._id;
+    school.updatedAt = Date.now();
+    await school.save();
+
+    res.status(200).json({
+      success: true,
+      data: {
+        url: fileUrl,
+        caption: caption || "",
+        remainingSlots: 5 - school.galleryVideos.length,
+      },
+      message: "Video uploaded successfully",
+    });
+  } catch (error) {
+    console.error("Error uploading video:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to upload video",
     });
   }
 };
@@ -356,6 +458,82 @@ exports.deleteGalleryImage = async (req, res, next) => {
     res.status(500).json({
       success: false,
       message: error.message || "Failed to delete gallery image",
+    });
+  }
+};
+
+// @desc    Delete gallery video
+// @route   DELETE /api/v1/school/gallery/video/:videoId
+// @access  Private (Admin only)
+exports.deleteGalleryVideo = async (req, res, next) => {
+  try {
+    const { videoId } = req.params;
+
+    const school = await School.findOne();
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: "School information not found",
+      });
+    }
+
+    if (!school.galleryVideos) {
+      return res.status(404).json({
+        success: false,
+        message: "Video not found",
+      });
+    }
+
+    const video = school.galleryVideos.id(videoId);
+    if (!video) {
+      return res.status(404).json({
+        success: false,
+        message: "Video not found",
+      });
+    }
+
+    await deleteFromFirebase(video.url);
+
+    school.galleryVideos.pull(videoId);
+    school.lastUpdatedBy = req.user._id;
+    school.updatedAt = Date.now();
+    await school.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Gallery video deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting gallery video:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to delete gallery video",
+    });
+  }
+};
+
+// @desc    Get school statistics
+// @route   GET /api/v1/school/stats
+// @access  Public
+exports.getSchoolStats = async (req, res, next) => {
+  try {
+    const [studentCount, teacherCount] = await Promise.all([
+      User.countDocuments({ role: "Student", status: "active" }),
+      User.countDocuments({ role: "Teacher", status: "active" }),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        studentCount,
+        teacherCount,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching school stats:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch school statistics",
     });
   }
 };
