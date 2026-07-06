@@ -114,7 +114,7 @@ exports.gradeActivity = asyncHandler(async (req, res, next) => {
     student: studentId,
     activity: activityId,
     subject: subject._id,
-    quarter: activity.quarter,
+    term: activity.term,
     score: numericScore,
     bonusPoints: numericBonusPoints,
     comments: comments || undefined,

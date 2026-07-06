@@ -17,7 +17,7 @@ const gradeSchema = new mongoose.Schema({
         ref: 'Subject',
         required: true
     },
-    quarter: {
+    term: {
         type: String,
         ref: 'Activity',
         required: true

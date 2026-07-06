@@ -365,7 +365,7 @@ const buildQuizPdf = (doc, quiz, imageBuffers) => {
 
   const metaParts = [
     `Subject: ${quiz.subject?.subjectName || "No Subject"}`,
-    `Quarter: ${quiz.quarter || "N/A"}`,
+    `Term: ${quiz.term || "N/A"}`,
     `Points: ${quiz.quizPoints || 0}`,
   ];
   if (quiz.timeLimit) {
@@ -604,7 +604,7 @@ const generateQuizWithAI = async (content, options = {}) => {
     questionTypes = ["multiple_choice", "true_false"],
     difficulty = "medium",
     subject = "",
-    quarter = "",
+    term = "",
   } = options;
 
   const prompt = `
@@ -618,7 +618,7 @@ Requirements:
 - Question types: ${questionTypes.join(", ")}
 - Difficulty level: ${difficulty}
 - Subject: ${subject}
-- Quarter: ${quarter}
+- Term: ${term}
 
 For each question, provide:
 1. Question text
@@ -847,7 +847,7 @@ exports.generateAIQuiz = asyncHandler(async (req, res, next) => {
   const {
     subject,
     title,
-    quarter,
+    term,
     numberOfQuestions = 10,
     questionTypes = ["multiple_choice", "true_false"],
     difficulty = "medium",
@@ -897,7 +897,7 @@ exports.generateAIQuiz = asyncHandler(async (req, res, next) => {
         : [questionTypes],
       difficulty,
       subject: subjectExists.subjectName,
-      quarter,
+      term,
     });
 
     console.log("AI generated", aiQuestions.length, "questions");
@@ -919,7 +919,7 @@ exports.generateAIQuiz = asyncHandler(async (req, res, next) => {
         quizPoints,
         // Include the form data for the modal to populate
         subject,
-        quarter,
+        term,
         timeLimit: timeLimit ? parseInt(timeLimit) : null,
       },
     });
@@ -942,7 +942,7 @@ exports.createQuiz = asyncHandler(async (req, res, next) => {
     sectionDescription,
     questions,
     timeLimit,
-    quarter,
+    term,
     shuffleQuestions,
   } = req.body;
 
@@ -1035,7 +1035,7 @@ exports.createQuiz = asyncHandler(async (req, res, next) => {
     sectionDescription,
     questions: parsedQuestions,
     timeLimit: timeLimit ? parseInt(timeLimit) : null,
-    quarter,
+    term,
     quizPoints,
     hasEssay,
     shuffleQuestions: parseBooleanField(shuffleQuestions) ?? false,
@@ -1078,7 +1078,7 @@ exports.updateQuiz = asyncHandler(async (req, res, next) => {
     sectionDescription,
     questions,
     timeLimit,
-    quarter,
+    term,
     status,
     shuffleQuestions,
   } = req.body;
@@ -1170,7 +1170,7 @@ exports.updateQuiz = asyncHandler(async (req, res, next) => {
           : quiz.sectionDescription,
       questions: parsedQuestions,
       timeLimit: timeLimit ? parseInt(timeLimit) : quiz.timeLimit,
-      quarter: quarter || quiz.quarter,
+      term: term || quiz.term,
       quizPoints,
       hasEssay,
       status: status || quiz.status,
@@ -1252,7 +1252,7 @@ exports.deleteQuiz = asyncHandler(async (req, res, next) => {
 // @route   GET /api/v1/quizzes
 // @access  Private
 exports.getQuizzes = asyncHandler(async (req, res, next) => {
-  const { subject, status, quarter, search } = req.query;
+  const { subject, status, term, search } = req.query;
 
   let query = {};
 
@@ -1261,9 +1261,9 @@ exports.getQuizzes = asyncHandler(async (req, res, next) => {
     query.status = status;
   }
 
-  // Filter by quarter if provided
-  if (quarter) {
-    query.quarter = quarter;
+  // Filter by term if provided
+  if (term) {
+    query.term = term;
   }
 
   // Search in title if provided
@@ -1466,7 +1466,7 @@ exports.duplicateQuiz = asyncHandler(async (req, res, next) => {
     sectionDescription: originalQuiz.sectionDescription,
     questions: originalQuiz.questions,
     timeLimit: originalQuiz.timeLimit,
-    quarter: originalQuiz.quarter,
+    term: originalQuiz.term,
     quizPoints: originalQuiz.quizPoints,
     shuffleQuestions: originalQuiz.shuffleQuestions,
     status: "draft",

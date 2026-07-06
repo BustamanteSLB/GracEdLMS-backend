@@ -89,7 +89,7 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
     description,
     visibleDate,
     deadline,
-    quarter,
+    term,
     points,
     allowLateSubmissions,
   } = req.body;
@@ -100,7 +100,7 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
     description,
     visibleDate,
     deadline,
-    quarter,
+    term,
     points,
     allowLateSubmissions,
     hasFile: !!req.file,
@@ -116,10 +116,10 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
   if (!mongoose.Types.ObjectId.isValid(subjectId)) {
     return next(new ErrorResponse(`Invalid subject ID: ${subjectId}`, 400));
   }
-  if (!title || !visibleDate || !deadline || !quarter) {
+  if (!title || !visibleDate || !deadline || !term) {
     return next(
       new ErrorResponse(
-        "Title, visibleDate, deadline, and quarter are required",
+        "Title, visibleDate, deadline, and term are required",
         400,
       ),
     );
@@ -144,7 +144,7 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
     description: description ? description.trim() : "",
     visibleDate: new Date(visibleDate),
     deadline: new Date(deadline),
-    quarter: quarter,
+    term: term,
     points: points !== undefined && points !== "" ? Number(points) : null,
     allowLateSubmissions:
       allowLateSubmissions === "true" || allowLateSubmissions === true,
@@ -187,7 +187,7 @@ exports.createActivity = asyncHandler(async (req, res, next) => {
   console.log("✅ Activity created successfully:", {
     id: activity._id,
     title: activity.title,
-    quarter: activity.quarter,
+    term: activity.term,
     allowLateSubmissions: activity.allowLateSubmissions,
     attachmentPath: activity.attachmentPath,
   });
@@ -320,7 +320,7 @@ exports.updateActivity = asyncHandler(async (req, res, next) => {
     description,
     visibleDate,
     deadline,
-    quarter,
+    term,
     points,
     allowLateSubmissions,
     removeAttachment,
@@ -371,7 +371,7 @@ exports.updateActivity = asyncHandler(async (req, res, next) => {
     description: description || "",
     visibleDate,
     deadline,
-    quarter,
+    term,
     points: points !== undefined && points !== "" ? Number(points) : null,
     allowLateSubmissions:
       allowLateSubmissions === "true" || allowLateSubmissions === true,

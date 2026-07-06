@@ -170,7 +170,7 @@ exports.createSubject = asyncHandler(async (req, res, next) => {
     gradeLevel,
     section: sectionName,
     schoolYear,
-    teachers, // Array of teacher assignments with quarters
+    teachers, // Array of teacher assignments with terms
   } = req.body;
 
   if (!subjectName || !schoolYear) {
@@ -219,7 +219,7 @@ exports.createSubject = asyncHandler(async (req, res, next) => {
 
   // Process teacher assignments
   for (const teacherAssignment of teachers) {
-    const { teacherId, quarters, isAssignedToAllQuarters } = teacherAssignment;
+    const { teacherId, terms, isAssignedToAllTerms } = teacherAssignment;
 
     if (!teacherId) {
       return next(new ErrorResponse("Teacher ID is required", 400));
@@ -235,24 +235,23 @@ exports.createSubject = asyncHandler(async (req, res, next) => {
       );
     }
 
-    // Validate quarters
-    if (isAssignedToAllQuarters) {
+    // Validate terms
+    if (isAssignedToAllTerms) {
       subjectData.teachers.push({
         teacher: teacher._id,
-        quarters: {
-          firstQuarter: true,
-          secondQuarter: true,
-          thirdQuarter: true,
-          fourthQuarter: true,
+        terms: {
+          1: true,
+          2: true,
+          3: true,
         },
-        isAssignedToAllQuarters: true,
+        isAssignedToAllTerms: true,
       });
     } else {
-      const hasAnyQuarter = Object.values(quarters || {}).some((q) => q);
-      if (!hasAnyQuarter) {
+      const hasAnyTerm = Object.values(terms || {}).some((t) => t);
+      if (!hasAnyTerm) {
         return next(
           new ErrorResponse(
-            `Teacher ${teacher.firstName} ${teacher.lastName} must be assigned to at least one quarter`,
+            `Teacher ${teacher.firstName} ${teacher.lastName} must be assigned to at least one term`,
             400,
           ),
         );
@@ -260,13 +259,12 @@ exports.createSubject = asyncHandler(async (req, res, next) => {
 
       subjectData.teachers.push({
         teacher: teacher._id,
-        quarters: quarters || {
-          firstQuarter: false,
-          secondQuarter: false,
-          thirdQuarter: false,
-          fourthQuarter: false,
+        terms: terms || {
+          1: false,
+          2: false,
+          3: false,
         },
-        isAssignedToAllQuarters: false,
+        isAssignedToAllTerms: false,
       });
     }
   }
@@ -341,7 +339,7 @@ exports.updateSubject = asyncHandler(async (req, res, next) => {
     gradeLevel,
     section,
     schoolYear,
-    teachers, // Array of teacher assignments with quarters
+    teachers, // Array of teacher assignments with terms
   } = req.body;
 
   const fieldsToUpdate = {};
@@ -394,7 +392,7 @@ exports.updateSubject = asyncHandler(async (req, res, next) => {
     const updatedTeachers = [];
 
     for (const teacherAssignment of teachers) {
-      const { teacherId, quarters, isAssignedToAllQuarters } =
+      const { teacherId, terms, isAssignedToAllTerms } =
         teacherAssignment;
 
       if (!teacherId) {
@@ -413,24 +411,23 @@ exports.updateSubject = asyncHandler(async (req, res, next) => {
 
       newTeacherIds.push(teacher._id.toString());
 
-      // Validate quarters
-      if (isAssignedToAllQuarters) {
+      // Validate terms
+      if (isAssignedToAllTerms) {
         updatedTeachers.push({
           teacher: teacher._id,
-          quarters: {
-            firstQuarter: true,
-            secondQuarter: true,
-            thirdQuarter: true,
-            fourthQuarter: true,
+          terms: {
+            1: true,
+            2: true,
+            3: true,
           },
-          isAssignedToAllQuarters: true,
+          isAssignedToAllTerms: true,
         });
       } else {
-        const hasAnyQuarter = Object.values(quarters || {}).some((q) => q);
-        if (!hasAnyQuarter) {
+        const hasAnyTerm = Object.values(terms || {}).some((t) => t);
+        if (!hasAnyTerm) {
           return next(
             new ErrorResponse(
-              `Teacher ${teacher.firstName} ${teacher.lastName} must be assigned to at least one quarter`,
+              `Teacher ${teacher.firstName} ${teacher.lastName} must be assigned to at least one term`,
               400,
             ),
           );
@@ -438,13 +435,12 @@ exports.updateSubject = asyncHandler(async (req, res, next) => {
 
         updatedTeachers.push({
           teacher: teacher._id,
-          quarters: quarters || {
-            firstQuarter: false,
-            secondQuarter: false,
-            thirdQuarter: false,
-            fourthQuarter: false,
+          terms: terms || {
+            1: false,
+            2: false,
+            3: false,
           },
-          isAssignedToAllQuarters: false,
+          isAssignedToAllTerms: false,
         });
       }
     }

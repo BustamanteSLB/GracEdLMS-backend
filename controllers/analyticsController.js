@@ -784,7 +784,7 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
         const subjectGrades = await Grade.find({
           student: student._id,
           subject: subject._id,
-        }).populate("activity", "points quarter");
+        }).populate("activity", "points term");
 
         let subjectTotalPossiblePoints = 0;
         let subjectTotalEarnedPoints = 0;
@@ -860,7 +860,7 @@ exports.getAdminAnalytics = asyncHandler(async (req, res, next) => {
                 const subjectGrades = await Grade.find({
                   student: student._id,
                   subject: subject._id,
-                }).populate("activity", "points quarter");
+                }).populate("activity", "points term");
 
                 let subjectTotalPossiblePoints = 0;
                 let subjectTotalEarnedPoints = 0;
@@ -1017,7 +1017,7 @@ exports.getSubjectGrades = asyncHandler(async (req, res, next) => {
 
   const grades = await Grade.find({ subject: subjectId })
     .populate("student", "firstName lastName email userId")
-    .populate("activity", "title points deadline quarter")
+    .populate("activity", "title points deadline term")
     .populate("gradedBy", "firstName lastName")
     .sort({ createdAt: -1 });
 

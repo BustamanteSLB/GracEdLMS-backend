@@ -54,11 +54,11 @@ const activitySchema = new mongoose.Schema(
       required: true,
     },
 
-    quarter: {
+    term: {
       type: String,
       required: true,
-      enum: ["First Quarter", "Second Quarter", "3rd Quarter", "4th Quarter"],
-      default: "First Quarter",
+      enum: ["1", "2", "3"],
+      default: "1",
     },
 
     points: {

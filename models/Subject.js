@@ -16,7 +16,7 @@ const subjectSchema = new mongoose.Schema(
     section: { type: String, trim: true },
     subjectImage: { type: String, default: null },
 
-    // Updated teacher assignment with quarters
+    // Updated teacher assignment with terms
     teachers: [
       {
         teacher: {
@@ -24,13 +24,12 @@ const subjectSchema = new mongoose.Schema(
           ref: "User",
           required: true,
         },
-        quarters: {
-          firstQuarter: { type: Boolean, default: false },
-          secondQuarter: { type: Boolean, default: false },
-          thirdQuarter: { type: Boolean, default: false },
-          fourthQuarter: { type: Boolean, default: false },
+        terms: {
+          1: { type: Boolean, default: false },
+          2: { type: Boolean, default: false },
+          3: { type: Boolean, default: false },
         },
-        isAssignedToAllQuarters: { type: Boolean, default: false },
+        isAssignedToAllTerms: { type: Boolean, default: false },
         assignedAt: { type: Date, default: Date.now },
       },
     ],
