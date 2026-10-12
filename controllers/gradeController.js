@@ -11,7 +11,7 @@ const { ErrorResponse } = require("../utils/errorResponse");
 // @access  Private/Teacher (assigned to the subject of the activity) or Private/Admin
 exports.gradeActivity = asyncHandler(async (req, res, next) => {
   const { activityId } = req.params;
-  const { studentId, score, comments, bonusPoints } = req.body;
+  const { studentId, score, comments, bonusPoints, term } = req.body;
 
   if (!mongoose.Types.ObjectId.isValid(activityId)) {
     return next(
@@ -110,11 +110,17 @@ exports.gradeActivity = asyncHandler(async (req, res, next) => {
     );
   }
 
+  const resolvedTerm = ["1", "2", "3"].includes(String(term))
+    ? String(term)
+    : ["1", "2", "3"].includes(String(activity.term))
+      ? String(activity.term)
+      : "1";
+
   const gradeData = {
     student: studentId,
     activity: activityId,
     subject: subject._id,
-    term: activity.term,
+    term: resolvedTerm,
     score: numericScore,
     bonusPoints: numericBonusPoints,
     comments: comments || undefined,
@@ -257,7 +263,7 @@ exports.getStudentGradesForSubject = asyncHandler(async (req, res, next) => {
 // @access  Private (Teacher who graded, or Admin)
 exports.updateGrade = asyncHandler(async (req, res, next) => {
   const { gradeId } = req.params;
-  const { score, comments, bonusPoints } = req.body;
+  const { score, comments, bonusPoints, term } = req.body;
 
   if (!mongoose.Types.ObjectId.isValid(gradeId)) {
     return next(new ErrorResponse("Invalid grade ID format", 400));
@@ -273,6 +279,19 @@ exports.updateGrade = asyncHandler(async (req, res, next) => {
 
   if (!isOriginalGrader && !isAdmin) {
     return next(new ErrorResponse("Not authorized to update this grade.", 403));
+  }
+
+  // Ensure required term is present (older grades may be missing it)
+  const activityTerm =
+    grade.activity && typeof grade.activity === "object"
+      ? grade.activity.term
+      : undefined;
+  if (["1", "2", "3"].includes(String(term))) {
+    grade.term = String(term);
+  } else if (!grade.term || !["1", "2", "3"].includes(String(grade.term))) {
+    grade.term = ["1", "2", "3"].includes(String(activityTerm))
+      ? String(activityTerm)
+      : "1";
   }
 
   // Update score if provided

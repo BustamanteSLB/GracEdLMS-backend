@@ -47,7 +47,10 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Enable CORS (configure origins in production)
-app.use(cors());
+app.use(cors({
+  origin: ['https://gracedlms.online', 'https://api.gracedlms.online', 'http://localhost:8081'],
+  credentials: true,
+}));
 
 // ─── SERVE STATIC FILES FROM UPLOADS DIRECTORY ─────────────────────────────────
 // This is what you're missing! Add this line:

@@ -129,7 +129,7 @@ const validateUpdateMe = [
 
 router.post("/login", validateLogin, login);
 router.post("/logout", protect, logout); // No body to validate generally
-router.post("/register", validateRegistration, register);
+router.post("/register", protect, authorize("Admin"), validateRegistration, register);
 router.get("/me", protect, getCurrentUser); // No body to validate
 router.put("/updateme", protect, validateUpdateMe, updateMe);
 // New route for user profile picture upload - accessible to all authenticated users
