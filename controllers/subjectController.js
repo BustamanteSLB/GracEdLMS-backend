@@ -653,7 +653,7 @@ exports.deleteSubject = asyncHandler(async (req, res, next) => {
 
 // @desc    Restore archived subject
 // @route   PUT /api/v1/subjects/:id/restore
-// @access  Private/Admin
+// @access  Private/Admin or Private/Teacher (assigned to the subject)
 exports.restoreSubject = asyncHandler(async (req, res, next) => {
   const subject = await Subject.findById(req.params.id);
 
@@ -665,6 +665,21 @@ exports.restoreSubject = asyncHandler(async (req, res, next) => {
 
   if (!subject.isArchived) {
     return next(new ErrorResponse("Subject is not archived", 400));
+  }
+
+  // Teachers may only restore subjects they are assigned to
+  if (req.user.role === "Teacher") {
+    const isAssignedTeacher = subject.teachers.some(
+      (ta) => ta.teacher && ta.teacher.toString() === req.user.id.toString(),
+    );
+    if (!isAssignedTeacher) {
+      return next(
+        new ErrorResponse(
+          "You are not authorized to restore this subject. You can only restore subjects assigned to you.",
+          403,
+        ),
+      );
+    }
   }
 
   // Restore the subject
@@ -695,7 +710,7 @@ exports.restoreSubject = asyncHandler(async (req, res, next) => {
 
 // @desc    Permanently delete subject
 // @route   DELETE /api/v1/subjects/:id/permanent
-// @access  Private/Admin
+// @access  Private/Admin or Private/Teacher (assigned to the subject)
 exports.permanentDeleteSubject = asyncHandler(async (req, res, next) => {
   const subject = await Subject.findById(req.params.id);
 
@@ -712,6 +727,21 @@ exports.permanentDeleteSubject = asyncHandler(async (req, res, next) => {
         400,
       ),
     );
+  }
+
+  // Teachers may only permanently delete subjects they are assigned to
+  if (req.user.role === "Teacher") {
+    const isAssignedTeacher = subject.teachers.some(
+      (ta) => ta.teacher && ta.teacher.toString() === req.user.id.toString(),
+    );
+    if (!isAssignedTeacher) {
+      return next(
+        new ErrorResponse(
+          "You are not authorized to permanently delete this subject. You can only delete subjects assigned to you.",
+          403,
+        ),
+      );
+    }
   }
 
   // Unassign from all teachers' assignedSubjects

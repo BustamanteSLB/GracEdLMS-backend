@@ -7,6 +7,8 @@ const {
   deleteQuiz,
   publishQuiz,
   archiveQuiz,
+  restoreQuiz,
+  permanentDeleteQuiz,
   duplicateQuiz,
   getQuizSubmissions,
   submitQuizResponse,
@@ -135,6 +137,12 @@ router
 // Quiz actions
 router.put("/:id/publish", authorize("Teacher", "Admin"), publishQuiz);
 router.put("/:id/archive", authorize("Teacher", "Admin"), archiveQuiz);
+router.put("/:id/restore", authorize("Teacher", "Admin"), restoreQuiz);
+router.delete(
+  "/:id/permanent",
+  authorize("Teacher", "Admin"),
+  permanentDeleteQuiz,
+);
 router.post("/:id/duplicate", authorize("Teacher", "Admin"), duplicateQuiz);
 router.get("/:id/download-pdf", authorize("Teacher", "Admin"), downloadQuizPdf);
 

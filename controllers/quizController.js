@@ -1192,7 +1192,7 @@ exports.updateQuiz = asyncHandler(async (req, res, next) => {
   });
 });
 
-// @desc    Delete quiz
+// @desc    Soft-delete (archive) quiz
 // @route   DELETE /api/v1/quizzes/:id
 // @access  Private/Teacher,Admin
 exports.deleteQuiz = asyncHandler(async (req, res, next) => {
@@ -1202,12 +1202,87 @@ exports.deleteQuiz = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse("Quiz not found", 404));
   }
 
-  // Check permissions
+  // Check permissions — teachers may only archive their own quizzes
   if (
     req.user.role === "Teacher" &&
     quiz.createdBy.toString() !== req.user.id
   ) {
-    return next(new ErrorResponse("Not authorized to delete this quiz", 403));
+    return next(new ErrorResponse("Not authorized to archive this quiz", 403));
+  }
+
+  if (quiz.status === "archived") {
+    return next(new ErrorResponse("Quiz is already archived", 400));
+  }
+
+  // Soft delete: move to archives instead of permanently deleting
+  quiz.status = "archived";
+  await quiz.save();
+
+  res.status(200).json({
+    success: true,
+    message: "Quiz archived successfully",
+    data: quiz,
+  });
+});
+
+// @desc    Restore archived quiz
+// @route   PUT /api/v1/quizzes/:id/restore
+// @access  Private/Teacher,Admin
+exports.restoreQuiz = asyncHandler(async (req, res, next) => {
+  const quiz = await Quiz.findById(req.params.id);
+
+  if (!quiz) {
+    return next(new ErrorResponse("Quiz not found", 404));
+  }
+
+  if (
+    req.user.role === "Teacher" &&
+    quiz.createdBy.toString() !== req.user.id
+  ) {
+    return next(new ErrorResponse("Not authorized to restore this quiz", 403));
+  }
+
+  if (quiz.status !== "archived") {
+    return next(new ErrorResponse("Quiz is not archived", 400));
+  }
+
+  // Restore as draft so the teacher can review before publishing again
+  quiz.status = "draft";
+  await quiz.save();
+
+  res.status(200).json({
+    success: true,
+    message: "Quiz restored successfully",
+    data: quiz,
+  });
+});
+
+// @desc    Permanently delete quiz
+// @route   DELETE /api/v1/quizzes/:id/permanent
+// @access  Private/Teacher,Admin
+exports.permanentDeleteQuiz = asyncHandler(async (req, res, next) => {
+  const quiz = await Quiz.findById(req.params.id);
+
+  if (!quiz) {
+    return next(new ErrorResponse("Quiz not found", 404));
+  }
+
+  if (
+    req.user.role === "Teacher" &&
+    quiz.createdBy.toString() !== req.user.id
+  ) {
+    return next(
+      new ErrorResponse("Not authorized to permanently delete this quiz", 403),
+    );
+  }
+
+  if (quiz.status !== "archived") {
+    return next(
+      new ErrorResponse(
+        "Quiz must be archived before permanent deletion",
+        400,
+      ),
+    );
   }
 
   // Delete associated images from Firebase Storage
@@ -1216,7 +1291,6 @@ exports.deleteQuiz = asyncHandler(async (req, res, next) => {
       if (question.images && question.images.length > 0) {
         for (const imageUrl of question.images) {
           try {
-            // Extract Firebase path from URL
             if (imageUrl.includes("storage.googleapis.com")) {
               const urlParts = imageUrl.split("/");
               const pathIndex = urlParts.findIndex(
@@ -1233,7 +1307,6 @@ exports.deleteQuiz = asyncHandler(async (req, res, next) => {
             }
           } catch (deleteError) {
             console.error(`Failed to delete image ${imageUrl}:`, deleteError);
-            // Continue deleting other images even if one fails
           }
         }
       }
@@ -1244,6 +1317,7 @@ exports.deleteQuiz = asyncHandler(async (req, res, next) => {
 
   res.status(200).json({
     success: true,
+    message: "Quiz permanently deleted",
     data: {},
   });
 });
@@ -1256,9 +1330,11 @@ exports.getQuizzes = asyncHandler(async (req, res, next) => {
 
   let query = {};
 
-  // Filter by status if provided
+  // Filter by status if provided; otherwise exclude archived (archives page uses status=archived)
   if (status) {
     query.status = status;
+  } else {
+    query.status = { $ne: "archived" };
   }
 
   // Filter by term if provided

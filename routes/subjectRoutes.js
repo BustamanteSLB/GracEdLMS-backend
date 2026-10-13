@@ -37,9 +37,13 @@ router
   .put(authorize("Admin", "Teacher"), updateSubject)
   .delete(authorize("Admin", "Teacher"), deleteSubject);
 
-// Archive management routes
-router.put("/:id/restore", authorize("Admin"), restoreSubject);
-router.delete("/:id/permanent", authorize("Admin"), permanentDeleteSubject);
+// Archive management routes (Admin: any subject; Teacher: only assigned subjects)
+router.put("/:id/restore", authorize("Admin", "Teacher"), restoreSubject);
+router.delete(
+  "/:id/permanent",
+  authorize("Admin", "Teacher"),
+  permanentDeleteSubject,
+);
 
 router.put("/:subjectId/assign-teacher", authorize("Admin"), assignTeacher);
 router.put("/:subjectId/unassign-teacher", authorize("Admin"), unassignTeacher);
